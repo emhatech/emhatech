@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EMHATECH AI GENERATOR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* For custom scrollbars */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #f1f5f9; /* bg-slate-100 */
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #cbd5e1; /* bg-slate-300 */
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8; /* bg-slate-400 */
+      }
+      .dark ::-webkit-scrollbar-track {
+        background: #1e293b; /* bg-slate-800 */
+      }
+      .dark ::-webkit-scrollbar-thumb {
+        background: #475569; /* bg-slate-600 */
+      }
+      .dark ::-webkit-scrollbar-thumb:hover {
+        background: #64748b; /* bg-slate-500 */
+      }
+      .animate-fade-in {
+        animation: fadeIn 0.5s ease-in-out;
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .led-text-animation {
+        animation: led-blink 2.5s infinite ease-in-out;
+      }
+      @keyframes led-blink {
+        0%, 100% {
+          text-shadow: 0 0 4px #06b6d4, 0 0 8px #06b6d4, 0 0 12px #06b6d4;
+        }
+        50% {
+          text-shadow: 0 0 8px #22d3ee, 0 0 16px #22d3ee, 0 0 24px #22d3ee;
+        }
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.28.0",
+    "jszip": "https://aistudiocdn.com/jszip@3.10.1/dist/jszip.min.js"
+  }
+}
+</script>
+</head>
+  <body class="bg-gradient-to-br from-slate-100 to-gray-200 text-slate-900 dark:from-slate-900 dark:to-slate-800 dark:text-slate-100 transition-colors duration-300">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
