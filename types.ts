@@ -53,3 +53,19 @@ export interface LyricData {
 }
 
 export type VeoModel = 'veo-3.1-fast-generate-preview' | 'veo-3.1-generate-preview' | 'veo-2.0-generate-preview';
+
+export type ProductCategory = 
+  | 'general' 
+  | 'clothing' 
+  | 'perfume_skincare' 
+  | 'vehicle' 
+  | 'footwear' 
+  | 'headwear' 
+  | 'eyewear' 
+  | 'toy_gadget';
+
+export interface ProductCategoryOption {
+    label: string;
+    value: ProductCategory;
+    actionVerb: string; // e.g. "Wearing", "Holding", "Riding"
+}

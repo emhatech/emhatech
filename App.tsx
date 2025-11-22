@@ -15,7 +15,7 @@ import { Spinner } from './components/common/Spinner';
 import { GENRES, INITIAL_IDEAS_COUNT, VOICE_OPTIONS, UGC_LANGUAGES, LYRIC_LANGUAGES } from './constants';
 import { 
     Genre, StoryIdea, GeneratedImage, CharacterImageData, Gender, 
-    View, Voice, AspectRatio, LyricLine, VeoModel, VideoResolution 
+    View, Voice, AspectRatio, LyricLine, VeoModel, VideoResolution, ProductCategory 
 } from './types';
 import { 
     setApiKeys, generateFullStory, generateStoryScenes, 
@@ -88,7 +88,9 @@ export const App: React.FC = () => {
 
     // UGC/Affiliate State
     const [ugcBaseImages, setUgcBaseImages] = useState<(CharacterImageData | null)[]>([null, null]);
-    const [ugcScenario, setUgcScenario] = useState('');
+    const [ugcCharacterDesc, setUgcCharacterDesc] = useState(''); // Specific for UGC
+    const [ugcProductDesc, setUgcProductDesc] = useState(''); // Specific for UGC Product
+    const [ugcScenario, setUgcScenario] = useState('A captivating, high-quality cinematic showcase featuring the subject in various aesthetic lifestyle settings. Professional lighting, elegant composition, viral social media style.');
     const [ugcGeneratedImages, setUgcGeneratedImages] = useState<(GeneratedImage | null)[]>(Array(7).fill(null));
     const [videoJsons, setVideoJsons] = useState<string[]>([]);
     const [isGeneratingUGC, setIsGeneratingUGC] = useState(false);
@@ -111,11 +113,9 @@ export const App: React.FC = () => {
     useEffect(() => {
         const handleContextMenu = (e: MouseEvent) => {
             e.preventDefault();
-            // Optional: alert("Aplikasi ini dilindungi hak cipta EmhaTech.");
         };
 
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Prevent F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
             if (
                 e.key === 'F12' ||
                 (e.ctrlKey && e.shiftKey && e.key === 'I') ||
@@ -135,17 +135,40 @@ export const App: React.FC = () => {
         };
     }, []);
 
-    // Initialize
+    // Initialize and Load Drafts
     useEffect(() => {
         try {
             const savedKeys = localStorage.getItem('gemini_api_keys');
             if (savedKeys) {
-                const parsed = JSON.parse(savedKeys);
-                setApiKeysState(parsed);
-                setApiKeys(parsed);
+                try {
+                    const parsed = JSON.parse(savedKeys);
+                    setApiKeysState(parsed);
+                    setApiKeys(parsed);
+                } catch (jsonError) {
+                    console.warn("Failed to parse saved API keys, clearing storage.", jsonError);
+                    localStorage.removeItem('gemini_api_keys');
+                }
+            }
+
+            // Load Auto-Saved Drafts
+            const savedDraft = localStorage.getItem('emhatech_wizard_draft');
+            if (savedDraft) {
+                try {
+                    const parsed = JSON.parse(savedDraft);
+                    if (parsed.storyText) setStoryText(parsed.storyText);
+                    if (parsed.characterText) setCharacterText(parsed.characterText);
+                    if (parsed.characterGender) setCharacterGender(parsed.characterGender);
+                    // Genre handling
+                    if (parsed.selectedGenreValue) {
+                        const savedGenre = GENRES.find(g => g.value === parsed.selectedGenreValue);
+                        if (savedGenre) setSelectedGenre(savedGenre);
+                    }
+                } catch (e) {
+                    console.warn("Failed to load saved draft", e);
+                }
             }
         } catch (e) {
-            console.warn("Local storage access blocked", e);
+            console.warn("Local storage access blocked or failed", e);
         }
 
         // Check system theme
@@ -153,6 +176,17 @@ export const App: React.FC = () => {
             setTheme('dark');
         }
     }, []);
+
+    // Auto-Save Drafts Effect
+    useEffect(() => {
+        const draft = {
+            storyText,
+            characterText,
+            characterGender,
+            selectedGenreValue: selectedGenre.value
+        };
+        localStorage.setItem('emhatech_wizard_draft', JSON.stringify(draft));
+    }, [storyText, characterText, characterGender, selectedGenre]);
 
     useEffect(() => {
         document.documentElement.className = theme;
@@ -288,21 +322,18 @@ export const App: React.FC = () => {
             setView('storybook');
 
             // Give a small initial delay to allow quota to cool down from text generation
-            await new Promise(r => setTimeout(r, 5000));
+            await new Promise(r => setTimeout(r, 3000));
 
-            // IMPORTANT: Loop image generation in background so UI updates one by one
-            // DO NOT await the entire loop before finishing the function
-            // But since we are inside an async function triggered by button, we can await here
-            // and user sees progress bars update.
-            
+            // Use character image for consistency if available
+            const refImages = characterImage?.base64 ? [characterImage.base64] : [];
+
             for (let i = 0; i < scenes.length; i++) {
                 try {
-                    // Add delay to prevent XHR errors from congestion
-                    // Increased delay to 40s to prevent 429 errors (Rate Limits)
-                    if (i > 0) await new Promise(r => setTimeout(r, 40000));
+                    // Increased delay to prevent 429 RESOURCE_EXHAUSTED
+                    if (i > 0) await new Promise(r => setTimeout(r, 8000));
 
                     // We pass true for 'enhanceQuality' to ensure head-to-toe/consistent rendering
-                    const base64 = await generateImage(scenes[i].imagePrompt, imageAspectRatio);
+                    const base64 = await generateImage(scenes[i].imagePrompt, imageAspectRatio, refImages);
                     setGeneratedImages(prev => {
                         const newImages = [...prev];
                         newImages[i] = {
@@ -346,7 +377,8 @@ export const App: React.FC = () => {
         });
 
         try {
-            const base64 = await generateImage(imageToRegen.prompt, imageAspectRatio);
+            const refImages = characterImage?.base64 ? [characterImage.base64] : [];
+            const base64 = await generateImage(imageToRegen.prompt, imageAspectRatio, refImages);
             setGeneratedImages(prev => {
                 const newImages = [...prev];
                 newImages[index] = { ...newImages[index], src: base64, isLoading: false };
@@ -357,7 +389,7 @@ export const App: React.FC = () => {
              handleApiError(error);
              setGeneratedImages(prev => {
                 const newImages = [...prev];
-                newImages[index] = { ...newImages[index], isLoading: false };
+                newImages[index] = { ...newImages[index]!, isLoading: false };
                 return newImages;
             });
         }
@@ -365,7 +397,10 @@ export const App: React.FC = () => {
 
     const handleDownloadImages = async () => {
       const validImages = generatedImages.filter(img => img.src);
-      if (validImages.length === 0) return;
+      if (validImages.length === 0) {
+          alert("Tidak ada gambar untuk disimpan. Silakan generate cerita terlebih dahulu.");
+          return;
+      }
 
       const zip = new JSZip();
       let storyContent = `JUDUL: CERITA OLEH EMHATECH AI\n\nCERITA LENGKAP:\n${fullStory}\n\n---\n\nDETAIL ADEGAN (8 SCENE):\n\n`;
@@ -423,7 +458,10 @@ export const App: React.FC = () => {
 
     const handleDownloadUGC = async () => {
         const validImages = ugcGeneratedImages.filter((img): img is GeneratedImage => img !== null && img.src !== null);
-        if (validImages.length === 0 && videoJsons.length === 0) return;
+        if (validImages.length === 0 && videoJsons.length === 0) {
+             alert("Tidak ada konten UGC untuk disimpan. Silakan generate terlebih dahulu.");
+             return;
+        }
 
         const zip = new JSZip();
         let textContent = `SKENARIO UGC:\n${ugcScenario}\n\n---\n\n`;
@@ -452,111 +490,166 @@ export const App: React.FC = () => {
         URL.revokeObjectURL(url);
     };
 
-    const handleGenerateUGC = async (useCharacter: boolean, useProduct: boolean) => {
+    const handleGenerateUGC = async (useCharacter: boolean, useProduct: boolean, productCategory: ProductCategory) => {
         setIsGeneratingUGC(true);
         setUgcGeneratedImages(Array(7).fill(null));
         setVideoJsons([]);
         
         try {
-            // Prepare character description from Wizard data to ensure global consistency
+            // Determine character description: Prefer specific UGC desc, fallback to general wizard text
             const genderStr = characterGender === 'male' ? 'Male' : characterGender === 'female' ? 'Female' : 'Character';
-            const fullCharacterDesc = `${genderStr}. ${characterText}`.trim();
+            // If ugcCharacterDesc is provided, use it as primary, otherwise use the wizard text
+            const charDescToUse = ugcCharacterDesc.trim() ? ugcCharacterDesc : `${genderStr}. ${characterText}`;
+
+            // Check if product should be included
+            const hasProductImage = !!ugcBaseImages[1];
+            const includeProduct = useProduct && hasProductImage;
+
+            // Use default prompt if empty (since input might be removed)
+            const promptToUse = ugcScenario.trim() || 'A captivating, high-quality cinematic showcase featuring the subject in various aesthetic lifestyle settings. Professional lighting, elegant composition, viral social media style.';
 
             // 1. Generate Scripts (Returns Array of Objects)
-            // Pass the character description so the prompt generator knows who to put in the UGC
-            const scripts = await generateUGCScripts(ugcScenario, ugcLanguage, fullCharacterDesc);
+            // Pass product image for multimodal analysis (Wearing vs Holding logic)
+            const productImage = includeProduct ? ugcBaseImages[1]?.base64 : undefined;
+            
+            const scripts = await generateUGCScripts(
+                promptToUse, 
+                ugcLanguage, 
+                charDescToUse, 
+                ugcProductDesc, // Pass the specific product description
+                includeProduct, 
+                productImage,
+                productCategory // Pass category strictly
+            );
             
             // Convert objects back to strings for display purposes in JsonDisplay
-            setVideoJsons(scripts.map(s => JSON.stringify(s, null, 2)));
-            
-            // 2. Generate Images for each script
-            const initialImages: GeneratedImage[] = scripts.map((s, i) => {
-                return {
-                    id: `ugc-${i}`,
-                    prompt: s.visual_prompt,
-                    src: null,
-                    isLoading: true
-                };
-            });
+            const jsonStrings = scripts.map(s => JSON.stringify(s, null, 2));
+            setVideoJsons(jsonStrings);
+
+            // 2. Setup placeholder images
+            const initialImages: GeneratedImage[] = scripts.map((s, i) => ({
+                id: `ugc-${Date.now()}-${i}`,
+                prompt: s.visual_prompt,
+                src: null,
+                isLoading: true
+            }));
             setUgcGeneratedImages(initialImages);
 
-            // Initial delay to allow quota settlement from script generation
-            await new Promise(r => setTimeout(r, 5000));
+            // 3. Collect reference images to pass to model
+            const referenceImages: string[] = [];
+            
+            // Order matters: Character first, then Product
+            if (useCharacter && ugcBaseImages[0]?.base64) {
+                referenceImages.push(ugcBaseImages[0].base64);
+            }
+            if (includeProduct && ugcBaseImages[1]?.base64) {
+                referenceImages.push(ugcBaseImages[1].base64);
+            }
 
-            for(let i = 0; i < scripts.length; i++) {
-                 try {
-                    // Add delay - Increased to 40s to prevent 429
-                    if (i > 0) await new Promise(r => setTimeout(r, 40000));
-                    
-                    // Enhance UGC prompts for better results if needed
-                    const finalPrompt = `${initialImages[i].prompt}, high quality, photorealistic, 8k, detailed`;
-                    const base64 = await generateImage(finalPrompt, '9:16');
+            // 4. Generate Images Loop
+            for (let i = 0; i < scripts.length; i++) {
+                // INCREASED DELAY: From 3s to 8s to avoid 429 errors
+                if (i > 0) await new Promise(r => setTimeout(r, 8000)); 
+
+                try {
+                    // Pass referenceImages to generateImage
+                    const base64 = await generateImage(scripts[i].visual_prompt, '9:16', referenceImages);
                     
                     setUgcGeneratedImages(prev => {
-                        const newImgs = [...prev];
-                        if(newImgs[i]) {
-                             newImgs[i] = { ...newImgs[i]!, src: base64, isLoading: false };
+                        const newImages = [...prev];
+                        if (newImages[i]) {
+                             newImages[i] = { ...newImages[i]!, src: base64, isLoading: false };
                         }
-                        return newImgs;
+                        return newImages;
                     });
-                 } catch (err) {
+                } catch (err) {
                     console.error(`Failed UGC image ${i}`, err);
-                     handleApiError(err);
-                     setUgcGeneratedImages(prev => {
-                        const newImgs = [...prev];
-                        if(newImgs[i]) newImgs[i] = { ...newImgs[i]!, isLoading: false };
-                        return newImgs;
+                    setUgcGeneratedImages(prev => {
+                        const newImages = [...prev];
+                        if (newImages[i]) {
+                             newImages[i] = { ...newImages[i]!, isLoading: false };
+                        }
+                        return newImages;
                     });
-                 }
+                }
             }
+
         } catch (e) {
             console.error(e);
-            alert('Gagal membuat UGC content: ' + (e as Error).message);
+            alert('Gagal membuat konten UGC: ' + (e as Error).message);
             handleApiError(e);
         } finally {
             setIsGeneratingUGC(false);
         }
     };
 
-    const handleGetLyrics = async () => {
-        setIsFetchingLyrics(true);
-        setOriginalLyrics('');
-        setLyricSources([]);
+    const handleRegenerateUGC = async (index: number, useCharacter: boolean, useProduct: boolean, productCategory: ProductCategory) => {
+        if (!videoJsons[index]) return;
+
+        // Parse the prompt from the JSON
+        let prompt = "";
         try {
-            const { lyrics, sources } = await generateLyrics(youtubeUrl);
-            setOriginalLyrics(lyrics);
-            setLyricSources(sources);
+             const script = JSON.parse(videoJsons[index]);
+             prompt = script.visual_prompt;
         } catch (e) {
-            console.error(e);
-            setOriginalLyrics('Gagal mengambil lirik. Silakan coba lagi.');
-            handleApiError(e);
-        } finally {
-            setIsFetchingLyrics(false);
+            return;
+        }
+
+        setUgcGeneratedImages(prev => {
+            const newImages = [...prev];
+            if (newImages[index]) {
+                 newImages[index] = { ...newImages[index]!, isLoading: true };
+            }
+            return newImages;
+        });
+
+        try {
+            const referenceImages: string[] = [];
+            // Index 0 is Character, Index 1 is Product in ugcBaseImages
+            if (useCharacter && ugcBaseImages[0]?.base64) {
+                referenceImages.push(ugcBaseImages[0].base64);
+            }
+            if (useProduct && ugcBaseImages[1]?.base64) {
+                referenceImages.push(ugcBaseImages[1].base64);
+            }
+
+            const base64 = await generateImage(prompt, '9:16', referenceImages);
+            
+            setUgcGeneratedImages(prev => {
+                const newImages = [...prev];
+                newImages[index] = { ...newImages[index]!, src: base64, isLoading: false };
+                return newImages;
+            });
+        } catch (e) {
+             console.error(e);
+             handleApiError(e);
+             setUgcGeneratedImages(prev => {
+                const newImages = [...prev];
+                newImages[index] = { ...newImages[index]!, isLoading: false };
+                return newImages;
+            });
         }
     };
 
-    const handleTranslateLyrics = async () => {
-        if (!originalLyrics) return;
-        setIsTranslatingLyrics(true);
-        setTranslatedLyrics(null);
-        try {
-            const translated = await translateLyrics(originalLyrics, selectedLyricLanguage);
-            setTranslatedLyrics(translated);
-        } catch (e) {
-            console.error(e);
-            alert('Gagal menerjemahkan lirik.');
-            handleApiError(e);
-        } finally {
-            setIsTranslatingLyrics(false);
-        }
-    };
-
-    const handleGenerateVideo = async (prompt: string, ratio: AspectRatio, model: VeoModel, res: VideoResolution, img: CharacterImageData | null) => {
+     const handleVeoGenerate = async (prompt: string, aspectRatio: AspectRatio, model: VeoModel, resolution: VideoResolution, image: CharacterImageData | null) => {
         setIsGeneratingVideo(true);
         setGeneratedVideoUrl(null);
         try {
-            const url = await generateVeoVideo(prompt, model, ratio, res, img?.base64);
+            const videoUri = await generateVeoVideo(
+                prompt, 
+                model, 
+                aspectRatio, 
+                resolution, 
+                image?.base64
+            );
+            
+            const res = await fetch(videoUri);
+            if (!res.ok) throw new Error("Failed to fetch video content");
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            
             setGeneratedVideoUrl(url);
+
         } catch (e) {
             console.error(e);
             alert('Gagal membuat video: ' + (e as Error).message);
@@ -566,148 +659,179 @@ export const App: React.FC = () => {
         }
     };
 
-  return (
-    <div className={`min-h-screen bg-slate-50 dark:bg-slate-900 transition-colors duration-300 font-sans flex flex-col relative select-none`}>
-      
-      {/* Story specific Loading Overlay */}
-      {isGeneratingStory && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in cursor-wait">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full text-center border-2 border-cyan-500 transform scale-100 transition-transform">
-            <div className="relative mb-6">
-                <div className="absolute inset-0 flex items-center justify-center animate-ping opacity-20">
-                    <div className="h-20 w-20 bg-cyan-500 rounded-full"></div>
-                </div>
-                <Spinner className="h-20 w-20 text-cyan-600 dark:text-cyan-400 mx-auto relative z-10" />
-            </div>
-            <h3 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-4 animate-pulse">
-                Sedang Merangkai Cerita...
-            </h3>
-            <div className="bg-cyan-50 dark:bg-cyan-900/30 p-4 rounded-xl border border-cyan-100 dark:border-cyan-800">
-                <p className="text-lg text-cyan-700 dark:text-cyan-300 font-medium">
-                   "{storyLoadingMessage}"
-                </p>
-            </div>
-          </div>
-        </div>
-      )}
+    const handleGetLyrics = async () => {
+        if (!youtubeUrl) return;
+        setIsFetchingLyrics(true);
+        setOriginalLyrics('');
+        setTranslatedLyrics(null);
+        setLyricSources([]);
+        
+        try {
+            const { lyrics, sources } = await generateLyrics(youtubeUrl);
+            setOriginalLyrics(lyrics);
+            setLyricSources(sources);
+        } catch (e) {
+             console.error(e);
+             handleApiError(e);
+             setOriginalLyrics("Gagal mendapatkan lirik. Pastikan link benar atau coba judul lagu.");
+        } finally {
+            setIsFetchingLyrics(false);
+        }
+    };
 
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full flex-grow">
-            <Header 
-                theme={theme} 
-                onThemeToggle={handleThemeToggle} 
-                onApiKeySettingsClick={() => setShowApiKeyModal(true)}
+    const handleTranslateLyrics = async () => {
+        if (!originalLyrics) return;
+        setIsTranslatingLyrics(true);
+        try {
+            const result = await translateLyrics(originalLyrics, selectedLyricLanguage);
+            setTranslatedLyrics(result);
+        } catch (e) {
+            console.error(e);
+            handleApiError(e);
+            alert("Gagal menerjemahkan lirik.");
+        } finally {
+             setIsTranslatingLyrics(false);
+        }
+    };
+
+    return (
+        <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans transition-colors duration-300">
+            <ApiKeyModal 
+                isOpen={showApiKeyModal} 
+                currentApiKeys={apiKeys} 
+                onClose={() => setShowApiKeyModal(false)} 
+                onSave={handleApiKeysSave} 
             />
-
-            <div className="flex overflow-x-auto space-x-2 border-b border-slate-200 dark:border-slate-700 mt-8 mb-8 pb-1 scrollbar-hide">
-                <TabButton name="Wizard Cerita" active={view === 'wizard'} onClick={() => setView('wizard')} />
-                <TabButton name="Buku Cerita" active={view === 'storybook'} onClick={() => setView('storybook')} disabled={generatedImages.length === 0 && view !== 'storybook'} />
-                <TabButton name="UGC & Prompt" active={view === 'imageAffiliate'} onClick={() => setView('imageAffiliate')} />
-                <TabButton name="Lirik Musik" active={view === 'musicLyric'} onClick={() => setView('musicLyric')} />
-                <TabButton name="Video Generator" active={view === 'videoGenerator'} onClick={() => setView('videoGenerator')} />
-                <TabButton name="Tentang" active={view === 'about'} onClick={() => setView('about')} />
+            
+            {/* WARNING BANNER */}
+            <div className="bg-red-600 text-white py-2 overflow-hidden shadow-md relative z-20 border-b border-red-800">
+                 <div className="marquee-container">
+                    <div className="marquee-content font-bold text-sm sm:text-base tracking-wider uppercase">
+                        WARNING: UBAH TOOLS INI TIDAK ADA GARANSI TERIMAKASIH!!!  &nbsp;&nbsp;&nbsp;  WARNING: UBAH TOOLS INI TIDAK ADA GARANSI TERIMAKASIH!!!
+                    </div>
+                 </div>
             </div>
 
-            <main className="min-h-[500px]">
-                {view === 'wizard' && (
-                    <StoryWizard
-                        genres={GENRES}
-                        selectedGenre={selectedGenre}
-                        onGenreChange={handleGenreChange}
-                        storyIdeas={storyIdeas}
-                        isLoadingIdeas={isLoadingIdeas}
-                        onSelectIdea={handleSelectIdea}
-                        storyText={storyText}
-                        onStoryTextChange={setStoryText}
-                        onDismissIdea={(idea) => setStoryIdeas(prev => prev.filter(i => i.id !== idea.id))}
-                        isStoryReady={storyText.trim().length > 50}
-                        onGenerateStory={handleGenerateStory}
-                        isGeneratingStory={isGeneratingStory}
-                        onPolishStory={handlePolishStory}
-                        isPolishing={isPolishing}
-                        characterImage={characterImage}
-                        onCharacterImageChange={handleGlobalCharacterImageChange} // Use unified handler
-                        characterText={characterText}
-                        onCharacterTextChange={setCharacterText}
-                        characterGender={characterGender}
-                        onCharacterGenderChange={setCharacterGender}
-                        animalImage={animalImage}
-                        onAnimalImageChange={setAnimalImage}
-                        imageAspectRatio={imageAspectRatio}
-                        onImageAspectRatioChange={setImageAspectRatio}
-                    />
-                )}
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full py-6 flex-grow flex flex-col">
+                <Header theme={theme} onThemeToggle={handleThemeToggle} onApiKeySettingsClick={() => setShowApiKeyModal(true)} />
 
-                {view === 'storybook' && (
-                    <StorybookView
-                        fullStory={fullStory}
-                        generatedImages={generatedImages}
-                        isGeneratingAudio={isGeneratingAudio}
-                        onDownloadAudio={handleDownloadAudio}
-                        onDownloadImages={handleDownloadImages}
-                        onRegenerateImage={handleRegenerateImage}
-                        selectedVoice={selectedVoice}
-                        onVoiceChange={setSelectedVoice}
-                        voiceOptions={VOICE_OPTIONS}
-                        sceneNarrations={sceneNarrations}
-                    />
-                )}
+                <nav className="flex overflow-x-auto gap-2 my-6 pb-2 no-scrollbar">
+                    <TabButton name="Generator Cerita" active={view === 'wizard' || view === 'storybook'} onClick={() => setView('wizard')} />
+                    <TabButton name="UGC Img & Prompt" active={view === 'imageAffiliate'} onClick={() => setView('imageAffiliate')} />
+                    <TabButton name="Lirik & Musik" active={view === 'musicLyric'} onClick={() => setView('musicLyric')} />
+                    <TabButton name="Video Generator" active={view === 'videoGenerator'} onClick={() => setView('videoGenerator')} />
+                    <TabButton name="Tentang" active={view === 'about'} onClick={() => setView('about')} />
+                </nav>
 
-                {view === 'imageAffiliate' && (
-                    <ImageAffiliateView
-                        baseImages={ugcBaseImages}
-                        onBaseImageChange={handleUgcBaseImageChange} // Use unified handler
-                        isGenerating={isGeneratingUGC}
-                        onGenerate={handleGenerateUGC}
-                        generatedImages={ugcGeneratedImages}
-                        videoJsons={videoJsons}
-                        onDownloadAll={handleDownloadUGC}
-                        scenario={ugcScenario}
-                        onScenarioChange={setUgcScenario}
-                        languages={UGC_LANGUAGES}
-                        selectedLanguage={ugcLanguage}
-                        onLanguageChange={setUgcLanguage}
-                    />
-                )}
+                <main className="flex-grow flex flex-col">
+                    {view === 'wizard' && (
+                        <StoryWizard
+                            genres={GENRES}
+                            selectedGenre={selectedGenre}
+                            onGenreChange={handleGenreChange}
+                            storyIdeas={storyIdeas}
+                            isLoadingIdeas={isLoadingIdeas}
+                            onSelectIdea={handleSelectIdea}
+                            storyText={storyText}
+                            onStoryTextChange={setStoryText}
+                            onDismissIdea={(idea) => setStoryIdeas(prev => prev.filter(i => i.id !== idea.id))}
+                            isStoryReady={!!storyText.trim()}
+                            onGenerateStory={handleGenerateStory}
+                            isGeneratingStory={isGeneratingStory}
+                            onPolishStory={handlePolishStory}
+                            isPolishing={isPolishing}
+                            characterImage={characterImage}
+                            onCharacterImageChange={handleGlobalCharacterImageChange}
+                            characterText={characterText}
+                            onCharacterTextChange={setCharacterText}
+                            characterGender={characterGender}
+                            onCharacterGenderChange={setCharacterGender}
+                            animalImage={animalImage}
+                            onAnimalImageChange={setAnimalImage}
+                            imageAspectRatio={imageAspectRatio}
+                            onImageAspectRatioChange={setImageAspectRatio}
+                        />
+                    )}
 
-                {view === 'musicLyric' && (
-                    <MusicLyricView
-                        youtubeUrl={youtubeUrl}
-                        onYoutubeUrlChange={setYoutubeUrl}
-                        onGetLyrics={handleGetLyrics}
-                        isFetchingLyrics={isFetchingLyrics}
-                        originalLyrics={originalLyrics}
-                        onOriginalLyricsChange={setOriginalLyrics}
-                        lyricSources={lyricSources}
-                        onTranslateLyrics={handleTranslateLyrics}
-                        isTranslatingLyrics={isTranslatingLyrics}
-                        translatedLyrics={translatedLyrics}
-                        languages={LYRIC_LANGUAGES}
-                        selectedLanguage={selectedLyricLanguage}
-                        onLanguageChange={setSelectedLyricLanguage}
-                    />
-                )}
+                    {view === 'storybook' && (
+                        <StorybookView
+                            fullStory={fullStory}
+                            generatedImages={generatedImages}
+                            isGeneratingAudio={isGeneratingAudio}
+                            onDownloadAudio={handleDownloadAudio}
+                            onDownloadImages={handleDownloadImages}
+                            onRegenerateImage={handleRegenerateImage}
+                            selectedVoice={selectedVoice}
+                            onVoiceChange={setSelectedVoice}
+                            voiceOptions={VOICE_OPTIONS}
+                            sceneNarrations={sceneNarrations}
+                        />
+                    )}
 
-                {view === 'videoGenerator' && (
-                    <VideoGeneratorView
-                        isGenerating={isGeneratingVideo}
-                        onGenerate={handleGenerateVideo}
-                        videoUrl={generatedVideoUrl}
-                        onReset={() => setGeneratedVideoUrl(null)}
-                    />
-                )}
+                    {view === 'imageAffiliate' && (
+                        <ImageAffiliateView
+                            baseImages={ugcBaseImages}
+                            onBaseImageChange={handleUgcBaseImageChange}
+                            isGenerating={isGeneratingUGC}
+                            onGenerate={handleGenerateUGC}
+                            generatedImages={ugcGeneratedImages}
+                            videoJsons={videoJsons}
+                            onDownloadAll={handleDownloadUGC}
+                            scenario={ugcScenario}
+                            onScenarioChange={setUgcScenario}
+                            languages={UGC_LANGUAGES}
+                            selectedLanguage={ugcLanguage}
+                            onLanguageChange={setUgcLanguage}
+                            onRegenerate={handleRegenerateUGC}
+                            characterDesc={ugcCharacterDesc}
+                            onCharacterDescChange={setUgcCharacterDesc}
+                            productDesc={ugcProductDesc}
+                            onProductDescChange={setUgcProductDesc}
+                        />
+                    )}
 
-                {view === 'about' && <AboutView />}
-            </main>
+                    {view === 'musicLyric' && (
+                        <MusicLyricView
+                            youtubeUrl={youtubeUrl}
+                            onYoutubeUrlChange={setYoutubeUrl}
+                            onGetLyrics={handleGetLyrics}
+                            isFetchingLyrics={isFetchingLyrics}
+                            originalLyrics={originalLyrics}
+                            onOriginalLyricsChange={setOriginalLyrics}
+                            lyricSources={lyricSources}
+                            onTranslateLyrics={handleTranslateLyrics}
+                            isTranslatingLyrics={isTranslatingLyrics}
+                            translatedLyrics={translatedLyrics}
+                            languages={LYRIC_LANGUAGES}
+                            selectedLanguage={selectedLyricLanguage}
+                            onLanguageChange={setSelectedLyricLanguage}
+                        />
+                    )}
+
+                     {view === 'videoGenerator' && (
+                        <VideoGeneratorView
+                            isGenerating={isGeneratingVideo}
+                            onGenerate={handleVeoGenerate}
+                            videoUrl={generatedVideoUrl}
+                            onReset={() => setGeneratedVideoUrl(null)}
+                        />
+                    )}
+
+                    {view === 'about' && <AboutView />}
+                    
+                    {isGeneratingStory && (
+                         <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm">
+                            <div className="text-center max-w-md p-8">
+                                <Spinner className="h-16 w-16 text-cyan-600 mx-auto mb-6" />
+                                <h3 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-2">{storyLoadingMessage}</h3>
+                                <p className="text-slate-600 dark:text-slate-400 animate-pulse">{loadingMessage}</p>
+                            </div>
+                        </div>
+                    )}
+                </main>
+            </div>
+            <Footer />
         </div>
-
-        <Footer />
-
-        <ApiKeyModal
-            isOpen={showApiKeyModal}
-            currentApiKeys={apiKeys}
-            onClose={() => setShowApiKeyModal(false)}
-            onSave={handleApiKeysSave}
-        />
-    </div>
-  );
+    );
 };
+    

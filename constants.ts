@@ -1,4 +1,5 @@
-import { Genre, VoiceOption, LanguageOption } from './types';
+
+import { Genre, VoiceOption, LanguageOption, ProductCategoryOption } from './types';
 
 export const INITIAL_IDEAS_COUNT = 16;
 
@@ -33,4 +34,15 @@ export const LYRIC_LANGUAGES: LanguageOption[] = [
     { name: 'Indonesia', value: 'Indonesian' },
     { name: 'Jawa', value: 'Javanese' },
     { name: 'Sunda', value: 'Sundanese' },
+];
+
+export const PRODUCT_CATEGORIES: ProductCategoryOption[] = [
+    { label: 'Umum / Lainnya', value: 'general', actionVerb: 'Holding/Showing' },
+    { label: 'Baju / Celana (Fashion)', value: 'clothing', actionVerb: 'WEARING on body' },
+    { label: 'Parfum / Skincare / Botol', value: 'perfume_skincare', actionVerb: 'HOLDING in hand / APPLYING' },
+    { label: 'Kendaraan (Motor/Mobil/Sepeda)', value: 'vehicle', actionVerb: 'RIDING / DRIVING / SITTING ON' },
+    { label: 'Sepatu / Sendal', value: 'footwear', actionVerb: 'WEARING on feet' },
+    { label: 'Topi / Helm', value: 'headwear', actionVerb: 'WEARING on head' },
+    { label: 'Kacamata', value: 'eyewear', actionVerb: 'WEARING on face' },
+    { label: 'Mainan / Gadget', value: 'toy_gadget', actionVerb: 'PLAYING WITH / HOLDING' },
 ];

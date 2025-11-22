@@ -1,11 +1,68 @@
 
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { Gender, AspectRatio } from '../types';
+import { Gender, AspectRatio, ProductCategory } from '../types';
 
 let apiKeys: string[] = [];
 
 export function setApiKeys(keys: string[]) {
     apiKeys = keys;
+}
+
+// Helper to extract error message robustly from various error objects/formats
+function getErrorMessage(error: any): string {
+    if (typeof error === 'string') return error;
+    if (error instanceof Error) return error.message;
+    // Handle the specific JSON error object structure usually returned by the proxy
+    // {"error":{"code":500,"message":"...","status":"UNKNOWN"}}
+    if (error?.error?.message) return error.error.message;
+    if (error?.message) return error.message;
+    
+    try {
+        return JSON.stringify(error);
+    } catch {
+        return "Unknown Error";
+    }
+}
+
+// Helper to resize image to reduce payload size and prevent RPC errors
+// Reduced default to 256px for reference images to speed up processing
+async function resizeImageBase64(base64Str: string, maxWidth = 256): Promise<string> {
+    if (!base64Str || !base64Str.startsWith('data:image')) return base64Str;
+    
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+                if (width > maxWidth) {
+                    height = Math.round((height * maxWidth) / width);
+                    width = maxWidth;
+                }
+            } else {
+                if (height > maxWidth) {
+                    width = Math.round((width * maxWidth) / height);
+                    height = maxWidth;
+                }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.drawImage(img, 0, 0, width, height);
+                // Compress to JPEG 0.5 to significantly reduce size
+                resolve(canvas.toDataURL('image/jpeg', 0.5));
+            } else {
+                resolve(base64Str);
+            }
+        };
+        img.onerror = () => resolve(base64Str);
+        img.src = base64Str;
+    });
 }
 
 async function callWithApiKeyRotation<T>(operation: (client: GoogleGenAI, key: string) => Promise<T>): Promise<T> {
@@ -17,16 +74,83 @@ async function callWithApiKeyRotation<T>(operation: (client: GoogleGenAI, key: s
         try {
             const client = new GoogleGenAI({ apiKey: key });
             return await operation(client, key);
-        } catch (error) {
-            console.warn("API Call failed with key", key.substring(0, 5) + "...", error);
+        } catch (error: any) {
+            const errorMessage = getErrorMessage(error);
+            
+            // Retry on specific RPC or XHR errors which are often transient
+            const isTransient = errorMessage.includes("Rpc failed") || 
+                               errorMessage.includes("xhr error") || 
+                               errorMessage.includes("fetch failed") ||
+                               errorMessage.includes("500") ||
+                               errorMessage.includes("503");
+
+            if (isTransient) {
+                 console.warn(`Transient network error with key ${key.substring(0,5)}...: ${errorMessage}. Retrying...`);
+                 // Add a small delay before retrying to allow connection to reset
+                 await new Promise(resolve => setTimeout(resolve, 1500));
+            } else {
+                 console.warn("API Call failed with key", key.substring(0, 5) + "...", errorMessage);
+            }
             lastError = error;
         }
     }
-    throw lastError || new Error("All API keys failed or none provided.");
+    
+    const finalErrorMessage = getErrorMessage(lastError);
+    throw new Error(finalErrorMessage || "All API keys failed or none provided.");
 }
 
 function cleanJsonText(text: string): string {
-    return text.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
+    if (!text) return "[]";
+    let cleaned = text.replace(/```json\s*/gi, '').replace(/```/g, '');
+    
+    // Find the first [ or {
+    const firstOpen = cleaned.search(/\[|\{/);
+    if (firstOpen !== -1) {
+        cleaned = cleaned.substring(firstOpen);
+        
+        // Try to find the matching closing bracket/brace at the end
+        const isArray = cleaned.trim().startsWith('[');
+        
+        if (isArray) {
+            // For arrays, find the last closing object brace '}' inside it, 
+            // in case the array itself is truncated (missing ']')
+            const lastObjClose = cleaned.lastIndexOf('}');
+            if (lastObjClose !== -1) {
+                // Cut off after the last complete object and ensure it ends with ]
+                // This handles cases where the JSON stream was cut off mid-object or mid-array
+                const candidate = cleaned.substring(0, lastObjClose + 1);
+                return candidate.endsWith(']') ? candidate : candidate + ']';
+            }
+        } else {
+             const lastClose = cleaned.lastIndexOf('}');
+             if (lastClose !== -1) {
+                return cleaned.substring(0, lastClose + 1);
+             }
+        }
+    }
+    
+    return cleaned.trim();
+}
+
+function safeJsonParse(text: string, fallback: any) {
+    const cleaned = cleanJsonText(text);
+    try {
+        return JSON.parse(cleaned);
+    } catch (e) {
+        // Truncate long error logs
+        const errorSnippet = text.length > 500 ? text.substring(0, 200) + '... [TRUNCATED]' : text;
+        console.error(`JSON Parse Failed. Length: ${text.length}. Snippet: ${errorSnippet}`);
+        
+        // Attempt to recover from truncation
+        if (cleaned.startsWith('[')) {
+            try { return JSON.parse(cleaned + ']'); } catch (e2) {}
+            try { return JSON.parse(cleaned + '}]'); } catch (e3) {}
+        } else if (cleaned.startsWith('{')) {
+            try { return JSON.parse(cleaned + '}'); } catch (e5) {}
+        }
+        
+        return fallback;
+    }
 }
 
 export async function generateStoryIdeas(genre: string): Promise<{id: string, text: string}[]> {
@@ -43,7 +167,7 @@ export async function generateStoryIdeas(genre: string): Promise<{id: string, te
                 }
             }
         });
-        const texts: string[] = JSON.parse(cleanJsonText(response.text || "[]"));
+        const texts: string[] = safeJsonParse(response.text || "[]", []);
         return texts.map((text, i) => ({ id: Date.now() + '-' + i, text }));
     });
 }
@@ -88,13 +212,14 @@ export async function generateStoryScenes(fullStory: string, characterDesc: stri
             model: 'gemini-2.5-flash',
             contents: `Analisis cerita berikut dan bagi menjadi TEPAT 8 adegan kunci.
             
-            PENTING - KONSISTENSI KARAKTER & VISUAL:
-            1. Gunakan deskripsi karakter ini secara KONSISTEN di setiap awal "imagePrompt": "${characterDesc || 'A main character'}".
-            2. Pastikan detail visual seperti warna baju, gaya rambut, dan fitur wajah TETAP SAMA di semua adegan.
-            3. Gunakan kata kunci komposisi yang variatif namun tetap sinematik: "Cinematic shot", "Detailed environment", "Action shot", "Wide angle".
+            PENTING - KONSISTENSI KARAKTER & VISUAL (CRITICAL):
+            1. Deskripsi Karakter Basis: "${characterDesc || 'A main character'}".
+            2. INSTRUCTION: In EVERY output "imagePrompt", you MUST include the full physical description of the character (hair color, clothes, face features).
+            3. Example: "A young man with messy red hair wearing a black leather jacket..." (Repeat this in every prompt).
+            4. Maintain consistent setting and atmosphere.
             
             Untuk setiap adegan (Total 8), berikan JSON:
-            1. "imagePrompt": Prompt bahasa Inggris yang SANGAT DETIL.
+            1. "imagePrompt": Prompt bahasa Inggris yang SANGAT DETIL dan KONSISTEN secara visual.
             2. "narration": Teks narasi bahasa Indonesia (2-3 kalimat).
             
             CERITA:\n${fullStory}`,
@@ -113,38 +238,89 @@ export async function generateStoryScenes(fullStory: string, characterDesc: stri
                 }
             }
         });
-        const json = JSON.parse(cleanJsonText(response.text || "[]"));
-        if (!Array.isArray(json)) throw new Error("Respons AI tidak valid untuk adegan cerita.");
+        const json = safeJsonParse(response.text || "[]", []);
+        if (!Array.isArray(json) || json.length === 0) throw new Error("Gagal menghasilkan adegan cerita (Invalid JSON).");
         return json;
     });
 }
 
-export async function generateImage(prompt: string, aspectRatio: AspectRatio): Promise<string> {
+export async function generateImage(prompt: string, aspectRatio: AspectRatio, referenceImages: string[] = []): Promise<string> {
     return callWithApiKeyRotation(async (client) => {
         const ratio = aspectRatio === '16:9' ? '16:9' : '9:16'; 
         
-        // Structured prompt for better instruction following
-        const enhancedPrompt = `Create a high-quality image based on this description: ${prompt}
+        // Enhanced Prompt Logic for Strict Consistency
+        let consistencyPrompt = "";
+        if (referenceImages.length > 0) {
+             consistencyPrompt = `
+             STRICT REFERENCE ADHERENCE INSTRUCTIONS:
+             You have been provided with reference image(s) acting as the Absolute Source of Truth.
+             
+             1. CHARACTER LOCK (Face & Body):
+                - The output image MUST depict the EXACT SAME person as in the reference (Same face shape, eyes, hair, body type).
+                - Maintain consistent ethnicity and age.
+                - KEEP THE SAME CLOTHES unless explicitly told to change.
+             
+             2. PRODUCT LOCK (Object Identity):
+                - If a product reference is provided, it MUST appear exactly as shown (same packaging, color, logo).
+                
+             3. CONTEXT AWARE INTERACTION (Crucial):
+                - Follow the prompt's verb strictly (WEARING vs HOLDING vs RIDING).
+                - Do NOT deviate from the action described in the prompt.
+             `;
+        }
+
+        const enhancedPrompt = `VISUAL PROMPT: ${prompt}
         
-        Requirements: Cinematic lighting, photorealistic, 8k resolution, highly detailed, masterpiece.
-        Composition: Full body shot or appropriate angle for action, detailed textures, perfect anatomy, symmetrical face.`;
+        ${consistencyPrompt}
+        
+        STYLE: Professional Commercial Photography, 8k resolution, highly detailed, viral social media aesthetic, perfect lighting, sharp focus, depth of field, photorealistic.
+        
+        NEGATIVE PROMPT: NO TEXT, NO WATERMARK, NO LOGO (unless on product), NO WRITING, NO LETTERS, NO UI, NO OVERLAY, cartoon, illustration, painting, distorted face, bad hands, extra fingers, blurry, low quality, ugly, distorted text, text overlay, subtitles, morphing, changing clothes, different face.`;
+
+        const parts: any[] = [];
+        
+        // Aggressively resize to 256px max for references to ensure successful request and speed
+        if (referenceImages.length > 0) {
+             const resizedRefs = await Promise.all(referenceImages.map(img => resizeImageBase64(img, 256)));
+             resizedRefs.forEach(base64 => {
+                const match = base64.match(/^data:(.+);base64,(.+)$/);
+                if (match) {
+                    parts.push({
+                        inlineData: {
+                            mimeType: match[1],
+                            data: match[2]
+                        }
+                    });
+                }
+            });
+        }
+
+        parts.push({ text: enhancedPrompt });
 
         let attempt = 0;
-        const maxAttempts = 5; 
+        const maxAttempts = 5; // Increased attempts to handle 429s better
 
         while (attempt < maxAttempts) {
             try {
-                const response = await client.models.generateContent({
-                    model: 'gemini-2.5-flash-image',
-                    contents: {
-                        parts: [{ text: enhancedPrompt }]
-                    },
-                    config: {
-                        imageConfig: {
-                            aspectRatio: ratio
+                // Increased timeout wrapper - 90s to allow queue processing
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error("API Request Timeout")), 90000)
+                );
+
+                const response = await Promise.race([
+                    client.models.generateContent({
+                        model: 'gemini-2.5-flash-image',
+                        contents: {
+                            parts: parts
+                        },
+                        config: {
+                            imageConfig: {
+                                aspectRatio: ratio
+                            }
                         }
-                    }
-                });
+                    }),
+                    timeoutPromise
+                ]) as any;
 
                 if (response.candidates && response.candidates[0].content.parts) {
                     for (const part of response.candidates[0].content.parts) {
@@ -155,21 +331,28 @@ export async function generateImage(prompt: string, aspectRatio: AspectRatio): P
                 }
                 throw new Error("No image data returned");
             } catch (err: any) {
-                console.warn(`Generate image attempt ${attempt + 1} failed:`, err);
+                const errMsg = getErrorMessage(err);
+                console.warn(`Generate image attempt ${attempt + 1} failed:`, errMsg);
                 attempt++;
-                if (attempt === maxAttempts) throw err;
                 
-                // Smart handling for Rate Limits (429)
                 const isRateLimit = 
-                    err.message?.includes('429') || 
-                    err.status === 429 || 
-                    err.message?.includes('RESOURCE_EXHAUSTED') ||
-                    err.error?.code === 429;
+                    errMsg.includes('429') || 
+                    errMsg.includes('RESOURCE_EXHAUSTED') ||
+                    errMsg.includes('quota');
                 
-                // If rate limited, wait significantly longer (starting at 60s)
-                const delay = isRateLimit ? 60000 + (attempt * 5000) : 5000 * Math.pow(2, attempt);
+                const isRpcError = 
+                    errMsg.includes('Rpc failed') || 
+                    errMsg.includes('xhr error') ||
+                    errMsg.includes('fetch failed') ||
+                    errMsg.includes('Timeout') ||
+                    errMsg.includes('500');
+
+                if (attempt === maxAttempts) throw new Error(errMsg);
                 
-                console.log(`Retrying in ${delay}ms...`);
+                // Dynamic backoff: 
+                // Rate limit: start at 15s + attempt * 5s 
+                const delay = isRateLimit ? 15000 + (attempt * 5000) : isRpcError ? 5000 : 4000;
+                console.log(`Waiting ${delay}ms before retry...`);
                 await new Promise(r => setTimeout(r, delay));
             }
         }
@@ -196,7 +379,7 @@ export async function generateSpeech(text: string, voice: string): Promise<strin
 
         const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
         if (!base64Audio) {
-            console.error("Response does not contain audio data. It might have been blocked by safety filters.");
+            console.error("Response does not contain audio data.");
             throw new Error("Tidak ada audio yang dihasilkan.");
         }
         return base64Audio;
@@ -242,45 +425,133 @@ export async function translateLyrics(text: string, targetLanguage: string): Pro
                 }
             }
         });
-        return JSON.parse(cleanJsonText(response.text || "[]"));
+        return safeJsonParse(response.text || "[]", []);
     });
 }
 
-export async function generateUGCScripts(scenario: string, language: string, characterDesc: string = ''): Promise<{visual_prompt: string, spoken_script: string}[]> {
+export async function generateUGCScripts(
+    scenario: string, 
+    language: string, 
+    characterDesc: string = '', 
+    productDesc: string = '',
+    includeProduct: boolean = false, 
+    productImageBase64?: string,
+    productCategory: ProductCategory = 'general'
+): Promise<any[]> {
     return callWithApiKeyRotation(async (client) => {
+        const parts: any[] = [];
+
+        // 1. Multimodal Analysis
+        if (includeProduct && productImageBase64) {
+             const resizedProduct = await resizeImageBase64(productImageBase64, 256);
+             const match = resizedProduct.match(/^data:(.+);base64,(.+)$/);
+             if (match) {
+                parts.push({
+                    inlineData: {
+                        mimeType: match[1],
+                        data: match[2]
+                    }
+                });
+             }
+        }
+
+        // 2. Product Instructions
+        let productBehaviorInstruction = "";
+        if (includeProduct) {
+            switch (productCategory) {
+                case 'clothing':
+                    productBehaviorInstruction = "ACTION: The character MUST be WEARING the product on their body. Do NOT hold it.";
+                    break;
+                case 'perfume_skincare':
+                    productBehaviorInstruction = "ACTION: The character MUST be HOLDING the bottle in hand or APPLYING it.";
+                    break;
+                case 'vehicle':
+                    productBehaviorInstruction = "ACTION: The character MUST be RIDING or DRIVING the vehicle.";
+                    break;
+                case 'footwear':
+                    productBehaviorInstruction = "ACTION: The character MUST be WEARING the shoes on their feet.";
+                    break;
+                case 'headwear':
+                    productBehaviorInstruction = "ACTION: The character MUST be WEARING the hat/helmet on their head.";
+                    break;
+                case 'eyewear':
+                    productBehaviorInstruction = "ACTION: The character MUST be WEARING the glasses on their face.";
+                    break;
+                case 'toy_gadget':
+                    productBehaviorInstruction = "ACTION: The character MUST be PLAYING WITH or HOLDING the gadget.";
+                    break;
+                case 'general':
+                default:
+                    productBehaviorInstruction = "ACTION: The character should be HOLDING or USING the product.";
+                    break;
+            }
+        }
+
+        const productInstruction = includeProduct 
+            ? `STRICT PROFESSIONAL AFFILIATE MARKETING MODE:
+               - CATEGORY LOCK: **${productCategory.toUpperCase()}**.
+               - ${productBehaviorInstruction}
+               - PRODUCT DETAIL INSTRUCTIONS: ${productDesc || 'Match the appearance of the product image provided.'}
+               - Ensure product appearance matches reference exactly.
+               - Scenes: Hook -> Problem -> Solution -> Social Proof -> CTA.`
+            : 'Focus on a cohesive personal lifestyle vlog.';
+
+        const promptText = `Create a 7-scene video script sequence (vertical 9:16) based on: "${scenario}".
+            Target Language: ${language}.
+
+            ${productInstruction}
+            
+            VISUAL CONSISTENCY RULES:
+               - CHARACTER BASE: "${characterDesc || 'The main subject'}".
+               - INSTRUCTION: In EVERY 'visual_prompt', REPEAT the character's physical description.
+
+            CRITICAL OUTPUT RULES:
+            1. Output strictly a JSON ARRAY of 7 objects.
+            2. "visual_prompt": Detailed English prompt for Image Gen AI.
+            3. "spoken_script": Natural, viral-style voiceover in ${language}.
+            4. "background_sound": Audio mood/sfx suggestion.
+            
+            JSON Schema:
+            [
+              { "scene_number": 1, "visual_prompt": "...", "spoken_script": "...", "background_sound": "..." }
+            ]`;
+
+        parts.push({ text: promptText });
+
         const response = await client.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: `Create a 7-scene UGC video script based on: "${scenario}" in language ${language}.
-            Return a JSON ARRAY of objects with keys "visual_prompt" and "spoken_script".
-            
-            CRITICAL INSTRUCTION FOR VISUAL_PROMPT:
-            The visual_prompt must explicitly describe the following character in every scene to ensure consistency: "${characterDesc}".
-            Ensure the "visual_prompt" describes a FULL BODY shot of this character in a consistent outfit from head to toe. 
-            Use keywords: "Full body shot", "Wide angle", "Showing shoes and full outfit", "High detail 8k".`,
+            contents: { parts: parts },
             config: {
                 responseMimeType: "application/json",
+                // We don't explicitly set maxOutputTokens to avoid cutting it off unnecessarily, 
+                // but rely on the model's default which is usually generous for Flash.
                 responseSchema: {
                     type: Type.ARRAY,
                     items: {
                         type: Type.OBJECT,
                         properties: {
+                            scene_number: { type: Type.INTEGER },
                             visual_prompt: { type: Type.STRING },
-                            spoken_script: { type: Type.STRING }
+                            spoken_script: { type: Type.STRING },
+                            background_sound: { type: Type.STRING }
                         }
                     }
                 }
             }
         });
-        return JSON.parse(cleanJsonText(response.text || "[]"));
+        const json = safeJsonParse(response.text || "[]", []);
+        if (!Array.isArray(json) || json.length === 0) {
+             console.warn("UGC Script generation returned empty or invalid JSON");
+        }
+        return json;
     });
 }
 
 export async function generateVeoVideo(prompt: string, model: string, aspectRatio: string, resolution: string, imageBase64?: string): Promise<string> {
     return callWithApiKeyRotation(async (client, key) => {
-        // Construct params
         const params: any = {
             model: model,
-            prompt: prompt,
+            prompt: `${prompt} (Cinematic, high quality. STRICTLY NO TEXT OVERLAYS, NO WATERMARKS, NO LOGOS, NO TYPOGRAPHY, CLEAN VIDEO)`,
             config: {
                 numberOfVideos: 1,
                 resolution: resolution,
@@ -289,10 +560,10 @@ export async function generateVeoVideo(prompt: string, model: string, aspectRati
         };
 
         if (imageBase64) {
-            // For image-to-video, we need to pass image
+            const resizedImage = await resizeImageBase64(imageBase64, 512);
             params.image = {
-                imageBytes: imageBase64.split(',')[1], // Remove data:image... prefix if present
-                mimeType: 'image/png' // Assuming PNG or handled generally
+                imageBytes: resizedImage.split(',')[1],
+                mimeType: 'image/jpeg'
             };
         }
 
@@ -306,7 +577,7 @@ export async function generateVeoVideo(prompt: string, model: string, aspectRati
         const uri = operation.response?.generatedVideos?.[0]?.video?.uri;
         if (!uri) throw new Error("Video generation failed.");
         
-        // Return URI with key for direct fetch/playback if needed
         return `${uri}&key=${key}`;
     });
 }
+    

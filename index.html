@@ -47,6 +47,21 @@
           text-shadow: 0 0 8px #22d3ee, 0 0 16px #22d3ee, 0 0 24px #22d3ee;
         }
       }
+      /* Marquee Animation */
+      .marquee-container {
+        overflow: hidden;
+        white-space: nowrap;
+        position: relative;
+      }
+      .marquee-content {
+        display: inline-block;
+        animation: marquee 25s linear infinite;
+        padding-left: 100%; /* Start from right */
+      }
+      @keyframes marquee {
+        0% { transform: translateX(0); }
+        100% { transform: translateX(-100%); }
+      }
     </style>
   <script type="importmap">
 {

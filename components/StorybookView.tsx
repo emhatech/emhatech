@@ -1,5 +1,6 @@
+
 import React from 'react';
-import { DownloadIcon, RefreshIcon } from './Icons';
+import { DownloadIcon, RefreshIcon, XIcon } from './Icons';
 import { Spinner } from './common/Spinner';
 import { GeneratedImage, Voice, VoiceOption } from '../types';
 import { ImageLoadingSkeleton } from './common/ImageLoadingSkeleton';
@@ -86,19 +87,35 @@ export const StorybookView: React.FC<StorybookViewProps> = ({
                 const narration = sceneNarrations[index];
                 if (!narration) return null;
 
-                const isImageLoading = img.isLoading || !img.src;
+                // Determine State
+                const isLoading = img.isLoading;
+                const isError = !img.isLoading && !img.src;
+                const isSuccess = !!img.src;
                 
                 return (
                     <div key={img.id} className="border-t border-slate-200 dark:border-slate-700 pt-8 first:border-t-0 first:pt-0">
                         <h3 className="text-xl font-bold text-slate-800 dark:text-slate-200 mb-4">Adegan {index + 1}</h3>
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4">
                             {/* Left side: Image */}
-                            <div className="relative group aspect-video">
-                                {isImageLoading ? (
+                            <div className="relative group aspect-video bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600">
+                                {isLoading ? (
                                     <ImageLoadingSkeleton />
+                                ) : isError ? (
+                                    <div className="w-full h-full flex flex-col items-center justify-center text-center p-4">
+                                        <XIcon className="h-12 w-12 text-red-400 mb-4 opacity-80"/>
+                                        <p className="text-sm font-bold text-slate-600 dark:text-slate-400 mb-4">
+                                            Gagal menghasilkan gambar.
+                                        </p>
+                                        <button 
+                                            onClick={() => onRegenerateImage(img)}
+                                            className="px-4 py-2 bg-white dark:bg-slate-700 hover:bg-slate-50 dark:hover:bg-slate-600 rounded-lg text-sm font-bold shadow-sm border border-slate-300 dark:border-slate-500 transition-colors"
+                                        >
+                                            Coba Lagi (Regenerate)
+                                        </button>
+                                    </div>
                                 ) : (
                                     <>
-                                        <img src={img.src!} alt={`Generated scene for: ${img.prompt}`} className="rounded-lg object-cover w-full h-full border border-slate-200 dark:border-slate-600"/>
+                                        <img src={img.src!} alt={`Generated scene for: ${img.prompt}`} className="rounded-lg object-cover w-full h-full"/>
                                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 rounded-lg">
                                             <button
                                                 onClick={() => onRegenerateImage(img)}
