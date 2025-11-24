@@ -26,7 +26,7 @@ export interface CharacterImageData {
   name: string;
 }
 
-export type View = 'wizard' | 'storybook' | 'imageAffiliate' | 'about' | 'musicLyric';
+export type View = 'wizard' | 'storybook' | 'imageAffiliate' | 'about' | 'musicLyric' | 'videoGenerator';
 
 export type Gender = 'male' | 'female' | 'unspecified';
 

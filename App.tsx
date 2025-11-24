@@ -8,6 +8,7 @@ import { ImageAffiliateView } from './components/ImageAffiliateView';
 import { AboutView } from './components/AboutView';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { MusicLyricView } from './components/MusicLyricView';
+import { VideoGeneratorView } from './components/VideoGeneratorView';
 import { TabButton } from './components/common/TabButton';
 import { Spinner } from './components/common/Spinner';
 import { GENRES, INITIAL_IDEAS_COUNT, VOICE_OPTIONS, UGC_LANGUAGES, LYRIC_LANGUAGES } from './constants';
@@ -86,8 +87,8 @@ export const App: React.FC = () => {
 
     // UGC/Affiliate State
     const [ugcBaseImages, setUgcBaseImages] = useState<(CharacterImageData | null)[]>([null, null]);
-    const [ugcCharacterDesc, setUgcCharacterDesc] = useState(''); // Specific for UGC
-    const [ugcProductDesc, setUgcProductDesc] = useState(''); // Specific for UGC Product
+    const [ugcCharacterDesc, setUgcCharacterDesc] = useState(''); 
+    const [ugcProductDesc, setUgcProductDesc] = useState(''); 
     const [ugcScenario, setUgcScenario] = useState('A captivating, high-quality cinematic showcase featuring the subject in various aesthetic lifestyle settings. Professional lighting, elegant composition, viral social media style.');
     const [ugcGeneratedImages, setUgcGeneratedImages] = useState<(GeneratedImage | null)[]>(Array(7).fill(null));
     const [videoJsons, setVideoJsons] = useState<string[]>([]);
@@ -142,6 +143,12 @@ export const App: React.FC = () => {
                     console.warn("Failed to parse saved API keys, clearing storage.", jsonError);
                     localStorage.removeItem('gemini_api_keys');
                 }
+            } else {
+                 // On initial load, if NO keys are saved and NO process.env.API_KEY is available (e.g. GitHub Pages),
+                 // Show the modal to prompt the user.
+                 if (!process.env.API_KEY) {
+                     setTimeout(() => setShowApiKeyModal(true), 1000);
+                 }
             }
 
             // Load Auto-Saved Drafts
@@ -152,7 +159,6 @@ export const App: React.FC = () => {
                     if (parsed.storyText) setStoryText(parsed.storyText);
                     if (parsed.characterText) setCharacterText(parsed.characterText);
                     if (parsed.characterGender) setCharacterGender(parsed.characterGender);
-                    // Genre handling
                     if (parsed.selectedGenreValue) {
                         const savedGenre = GENRES.find(g => g.value === parsed.selectedGenreValue);
                         if (savedGenre) setSelectedGenre(savedGenre);
@@ -165,7 +171,6 @@ export const App: React.FC = () => {
             console.warn("Local storage access blocked or failed", e);
         }
 
-        // Check system theme
         if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
             setTheme('dark');
         }
@@ -237,25 +242,22 @@ export const App: React.FC = () => {
             errorMessage.includes("api key") ||
             errorMessage.includes("403") ||
             errorMessage.includes("400") ||
-            errorMessage.includes("fetch failed")
+            errorMessage.includes("fetch failed") ||
+            errorMessage.includes("not valid")
         ) {
             setShowApiKeyModal(true);
         }
     };
 
-    // Unified Character Image Handler (Syncs Wizard <-> UGC)
     const handleGlobalCharacterImageChange = (img: CharacterImageData | null) => {
         setCharacterImage(img);
-        setUgcBaseImages(prev => [img, prev[1]]); // Sync Index 0 (Character)
+        setUgcBaseImages(prev => [img, prev[1]]); 
     };
 
-    // Unified UGC Image Handler (Syncs UGC <-> Wizard)
     const handleUgcBaseImageChange = (img: CharacterImageData | null, idx: number) => {
-        // If modifying index 0 (Character), sync back to Wizard
         if (idx === 0) {
             setCharacterImage(img);
         }
-        
         setUgcBaseImages(prev => {
             const newImages = [...prev];
             newImages[idx] = img;
@@ -304,7 +306,6 @@ export const App: React.FC = () => {
             const story = await generateFullStory(storyText, selectedGenre.name, characterGender);
             setFullStory(story);
             
-            // Pass character details to ensure consistency in prompts
             const genderStr = characterGender === 'male' ? 'Male' : characterGender === 'female' ? 'Female' : 'Character';
             const fullCharacterDesc = `${genderStr}. ${characterText}`.trim();
 
@@ -320,18 +321,14 @@ export const App: React.FC = () => {
             setGeneratedImages(initialImages);
             setView('storybook');
 
-            // Give a small initial delay to allow quota to cool down from text generation
             await new Promise(r => setTimeout(r, 3000));
 
-            // Use character image for consistency if available
             const refImages = characterImage?.base64 ? [characterImage.base64] : [];
 
             for (let i = 0; i < scenes.length; i++) {
                 try {
-                    // Increased delay to prevent 429 RESOURCE_EXHAUSTED
                     if (i > 0) await new Promise(r => setTimeout(r, 8000));
 
-                    // We pass true for 'enhanceQuality' to ensure head-to-toe/consistent rendering
                     const base64 = await generateImage(scenes[i].imagePrompt, imageAspectRatio, refImages);
                     setGeneratedImages(prev => {
                         const newImages = [...prev];
@@ -495,37 +492,27 @@ export const App: React.FC = () => {
         setVideoJsons([]);
         
         try {
-            // Determine character description: Prefer specific UGC desc, fallback to general wizard text
             const genderStr = characterGender === 'male' ? 'Male' : characterGender === 'female' ? 'Female' : 'Character';
-            // If ugcCharacterDesc is provided, use it as primary, otherwise use the wizard text
             const charDescToUse = ugcCharacterDesc.trim() ? ugcCharacterDesc : `${genderStr}. ${characterText}`;
-
-            // Check if product should be included
             const hasProductImage = !!ugcBaseImages[1];
             const includeProduct = useProduct && hasProductImage;
-
-            // Use default prompt if empty (since input might be removed)
             const promptToUse = ugcScenario.trim() || 'A captivating, high-quality cinematic showcase featuring the subject in various aesthetic lifestyle settings. Professional lighting, elegant composition, viral social media style.';
 
-            // 1. Generate Scripts (Returns Array of Objects)
-            // Pass product image for multimodal analysis (Wearing vs Holding logic)
             const productImage = includeProduct ? ugcBaseImages[1]?.base64 : undefined;
             
             const scripts = await generateUGCScripts(
                 promptToUse, 
                 ugcLanguage, 
                 charDescToUse, 
-                ugcProductDesc, // Pass the specific product description
+                ugcProductDesc, 
                 includeProduct, 
                 productImage,
-                productCategory // Pass category strictly
+                productCategory 
             );
             
-            // Convert objects back to strings for display purposes in JsonDisplay
             const jsonStrings = scripts.map(s => JSON.stringify(s, null, 2));
             setVideoJsons(jsonStrings);
 
-            // 2. Setup placeholder images
             const initialImages: GeneratedImage[] = scripts.map((s, i) => ({
                 id: `ugc-${Date.now()}-${i}`,
                 prompt: s.visual_prompt,
@@ -534,10 +521,8 @@ export const App: React.FC = () => {
             }));
             setUgcGeneratedImages(initialImages);
 
-            // 3. Collect reference images to pass to model
             const referenceImages: string[] = [];
             
-            // Order matters: Character first, then Product
             if (useCharacter && ugcBaseImages[0]?.base64) {
                 referenceImages.push(ugcBaseImages[0].base64);
             }
@@ -545,15 +530,11 @@ export const App: React.FC = () => {
                 referenceImages.push(ugcBaseImages[1].base64);
             }
 
-            // 4. Generate Images Loop
             for (let i = 0; i < scripts.length; i++) {
-                // INCREASED DELAY: From 3s to 8s to avoid 429 errors
                 if (i > 0) await new Promise(r => setTimeout(r, 8000)); 
 
                 try {
-                    // Pass referenceImages to generateImage
                     const base64 = await generateImage(scripts[i].visual_prompt, '9:16', referenceImages);
-                    
                     setUgcGeneratedImages(prev => {
                         const newImages = [...prev];
                         if (newImages[i]) {
@@ -586,7 +567,6 @@ export const App: React.FC = () => {
     const handleRegenerateUGC = async (index: number, useCharacter: boolean, useProduct: boolean, productCategory: ProductCategory) => {
         if (!videoJsons[index]) return;
 
-        // Parse the prompt from the JSON
         let prompt = "";
         try {
              const script = JSON.parse(videoJsons[index]);
@@ -605,7 +585,6 @@ export const App: React.FC = () => {
 
         try {
             const referenceImages: string[] = [];
-            // Index 0 is Character, Index 1 is Product in ugcBaseImages
             if (useCharacter && ugcBaseImages[0]?.base64) {
                 referenceImages.push(ugcBaseImages[0].base64);
             }
@@ -675,7 +654,6 @@ export const App: React.FC = () => {
                 onSave={handleApiKeysSave} 
             />
             
-            {/* WARNING BANNER */}
             <div className="bg-red-600 text-white py-2 overflow-hidden shadow-md relative z-20 border-b border-red-800">
                  <div className="marquee-container">
                     <div className="marquee-content font-bold text-sm sm:text-base tracking-wider uppercase">
@@ -689,6 +667,7 @@ export const App: React.FC = () => {
 
                 <nav className="flex overflow-x-auto gap-2 my-6 pb-2 no-scrollbar">
                     <TabButton name="Generator Cerita" active={view === 'wizard' || view === 'storybook'} onClick={() => setView('wizard')} />
+                    <TabButton name="Video Generator (Veo)" active={view === 'videoGenerator'} onClick={() => setView('videoGenerator')} />
                     <TabButton name="UGC Img & Prompt" active={view === 'imageAffiliate'} onClick={() => setView('imageAffiliate')} />
                     <TabButton name="Lirik & Musik" active={view === 'musicLyric'} onClick={() => setView('musicLyric')} />
                     <TabButton name="Tentang" active={view === 'about'} onClick={() => setView('about')} />
@@ -737,6 +716,10 @@ export const App: React.FC = () => {
                             voiceOptions={VOICE_OPTIONS}
                             sceneNarrations={sceneNarrations}
                         />
+                    )}
+
+                    {view === 'videoGenerator' && (
+                        <VideoGeneratorView />
                     )}
 
                     {view === 'imageAffiliate' && (

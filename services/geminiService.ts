@@ -95,6 +95,10 @@ async function callWithApiKeyRotation<T>(operation: (client: GoogleGenAI, key: s
     }
     
     const finalErrorMessage = getErrorMessage(lastError);
+    // Explicitly check for empty key scenarios common in GitHub deployments
+    if (finalErrorMessage.includes("API key not valid") || keysToTry.every(k => !k)) {
+        throw new Error("API Key hilang atau tidak valid. Silakan atur di tombol 'Gerigi' di pojok kanan atas.");
+    }
     throw new Error(finalErrorMessage || "All API keys failed or none provided.");
 }
 
@@ -336,13 +340,23 @@ export async function generateImage(prompt: string, aspectRatio: AspectRatio, re
                     // If we reach here, no inlineData was found. Check for text (often a safety refusal).
                     const textPart = response.candidates[0].content.parts.find((p: any) => p.text);
                     if (textPart) {
-                        throw new Error(`Refused: ${textPart.text}`);
+                         // Check for refusal
+                         if (textPart.text.toLowerCase().includes("safety") || textPart.text.toLowerCase().includes("unsafe")) {
+                             throw new Error("Gambar ditolak oleh filter keamanan (Safety Filter). Coba ubah prompt.");
+                         }
+                        throw new Error(`Model Refused: ${textPart.text}`);
                     }
                 }
                 throw new Error("No image data returned (Empty response)");
             } catch (err: any) {
                 const errMsg = getErrorMessage(err);
                 console.warn(`Generate image attempt ${attempt + 1} failed:`, errMsg);
+                
+                // If safety error, do not retry, just throw
+                if (errMsg.includes("Safety Filter") || errMsg.includes("unsafe")) {
+                    throw new Error(errMsg);
+                }
+
                 attempt++;
                 
                 const isRateLimit = 
@@ -357,7 +371,7 @@ export async function generateImage(prompt: string, aspectRatio: AspectRatio, re
                     errMsg.includes('Timeout') ||
                     errMsg.includes('500');
 
-                if (attempt === maxAttempts) throw new Error(errMsg);
+                if (attempt === maxAttempts) throw new Error(`Gagal setelah ${maxAttempts} percobaan: ${errMsg}`);
                 
                 // Dynamic backoff: 
                 // Rate limit: start at 15s + attempt * 5s 
@@ -582,5 +596,51 @@ export async function generateUGCScripts(
              console.warn("UGC Script generation returned empty or invalid JSON");
         }
         return json;
+    });
+}
+
+// VIDEO GENERATION (VEO)
+export async function generateVeoVideo(prompt: string, imageBase64: string | null, aspectRatio: AspectRatio = '16:9'): Promise<string> {
+    return callWithApiKeyRotation(async (client, key) => {
+        // Use the 'generate-preview' model for better quality as requested ("veo3.1 terbaru")
+        // NOTE: Veo requires a paid tier project. 
+        const request: any = {
+            model: 'veo-3.1-generate-preview', 
+            prompt: prompt,
+            config: {
+                 numberOfVideos: 1,
+                 resolution: '720p',
+                 aspectRatio: aspectRatio 
+            }
+        };
+
+        if (imageBase64) {
+             // Extract base64 data and mime type
+             const match = imageBase64.match(/^data:(.+);base64,(.+)$/);
+             if (match) {
+                 request.image = {
+                     mimeType: match[1],
+                     imageBytes: match[2]
+                 };
+             }
+        }
+
+        let operation = await client.models.generateVideos(request);
+
+        // Polling loop
+        while (!operation.done) {
+             await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
+             operation = await client.operations.getVideosOperation({ operation: operation });
+        }
+
+        const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+        if (!videoUri) throw new Error("No video URI returned from Veo.");
+
+        // Fetch the actual video blob using the same key
+        const vidResponse = await fetch(`${videoUri}&key=${key}`);
+        if (!vidResponse.ok) throw new Error("Failed to download video file.");
+        
+        const blob = await vidResponse.blob();
+        return URL.createObjectURL(blob);
     });
 }
