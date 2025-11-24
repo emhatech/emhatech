@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { Gender, AspectRatio, ProductCategory } from '../types';
 
@@ -101,7 +100,8 @@ async function callWithApiKeyRotation<T>(operation: (client: GoogleGenAI, key: s
 
 function cleanJsonText(text: string): string {
     if (!text) return "[]";
-    let cleaned = text.replace(/```json\s*/gi, '').replace(/```/g, '');
+    // Remove markdown code blocks more aggressively and trim
+    let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
     
     // Find the first [ or {
     const firstOpen = cleaned.search(/\[|\{/);
@@ -109,7 +109,7 @@ function cleanJsonText(text: string): string {
         cleaned = cleaned.substring(firstOpen);
         
         // Try to find the matching closing bracket/brace at the end
-        const isArray = cleaned.trim().startsWith('[');
+        const isArray = cleaned.startsWith('[');
         
         if (isArray) {
             // For arrays, find the last closing object brace '}' inside it, 
@@ -118,8 +118,14 @@ function cleanJsonText(text: string): string {
             if (lastObjClose !== -1) {
                 // Cut off after the last complete object and ensure it ends with ]
                 // This handles cases where the JSON stream was cut off mid-object or mid-array
-                const candidate = cleaned.substring(0, lastObjClose + 1);
-                return candidate.endsWith(']') ? candidate : candidate + ']';
+                let candidate = cleaned.substring(0, lastObjClose + 1);
+                if (!candidate.endsWith(']')) {
+                    candidate += ']';
+                }
+                return candidate;
+            } else {
+                // If no object closing found, return empty array to be safe
+                return "[]";
             }
         } else {
              const lastClose = cleaned.lastIndexOf('}');
@@ -129,7 +135,7 @@ function cleanJsonText(text: string): string {
         }
     }
     
-    return cleaned.trim();
+    return cleaned;
 }
 
 function safeJsonParse(text: string, fallback: any) {
@@ -137,16 +143,15 @@ function safeJsonParse(text: string, fallback: any) {
     try {
         return JSON.parse(cleaned);
     } catch (e) {
-        // Truncate long error logs
+        // Truncate long error logs for readability
         const errorSnippet = text.length > 500 ? text.substring(0, 200) + '... [TRUNCATED]' : text;
         console.error(`JSON Parse Failed. Length: ${text.length}. Snippet: ${errorSnippet}`);
         
-        // Attempt to recover from truncation
+        // Attempt aggressive recovery for simple arrays
         if (cleaned.startsWith('[')) {
+            // Try closing it if it looks like a valid start
             try { return JSON.parse(cleaned + ']'); } catch (e2) {}
             try { return JSON.parse(cleaned + '}]'); } catch (e3) {}
-        } else if (cleaned.startsWith('{')) {
-            try { return JSON.parse(cleaned + '}'); } catch (e5) {}
         }
         
         return fallback;
@@ -275,7 +280,7 @@ export async function generateImage(prompt: string, aspectRatio: AspectRatio, re
         
         STYLE: Professional Commercial Photography, 8k resolution, highly detailed, viral social media aesthetic, perfect lighting, sharp focus, depth of field, photorealistic.
         
-        NEGATIVE PROMPT: NO TEXT, NO WATERMARK, NO LOGO (unless on product), NO WRITING, NO LETTERS, NO UI, NO OVERLAY, cartoon, illustration, painting, distorted face, bad hands, extra fingers, blurry, low quality, ugly, distorted text, text overlay, subtitles, morphing, changing clothes, different face.`;
+        NEGATIVE PROMPT: text, writing, letters, words, alphabet, watermark, logo, signature, subtitles, captions, typography, brand name, label, ui, interface, menu, buttons, speech bubble, thought bubble, cartoon, illustration, painting, distorted face, bad hands, extra fingers, blurry, low quality, ugly, distorted text, text overlay, morphing, changing clothes, different face, sign, poster, billboard.`;
 
         const parts: any[] = [];
         
@@ -328,8 +333,13 @@ export async function generateImage(prompt: string, aspectRatio: AspectRatio, re
                             return `data:image/png;base64,${part.inlineData.data}`;
                         }
                     }
+                    // If we reach here, no inlineData was found. Check for text (often a safety refusal).
+                    const textPart = response.candidates[0].content.parts.find((p: any) => p.text);
+                    if (textPart) {
+                        throw new Error(`Refused: ${textPart.text}`);
+                    }
                 }
-                throw new Error("No image data returned");
+                throw new Error("No image data returned (Empty response)");
             } catch (err: any) {
                 const errMsg = getErrorMessage(err);
                 console.warn(`Generate image attempt ${attempt + 1} failed:`, errMsg);
@@ -388,15 +398,40 @@ export async function generateSpeech(text: string, voice: string): Promise<strin
 
 export async function generateLyrics(query: string): Promise<{ lyrics: string, sources: any[] }> {
     return callWithApiKeyRotation(async (client) => {
+        // Robust prompt for accurate searching and extraction with WORLDWIDE scope
+        const prompt = `
+        You are the Ultimate World Music Archivist. Your capabilities extend to EVERY corner of the internet.
+        USER REQUEST: "Mengelilingi seluruh sumber yang ada di dunia karena yang aku butuhkan semua lagu dari seluruh dunia" (Cover all sources in the world, need all songs from around the world).
+        
+        QUERY: "${query}".
+        
+        MISSION:
+        1. **GLOBAL HUNT**: Search Indonesia, Asia (Japan, Korea, China, Thailand), West, Latin, Arab, Africa. No boundaries.
+        2. **SOURCE CHECK**: Scan Genius, Musixmatch, KapanLagi, Melon, Uta-Net, Vagalume, Anghami, YouTube Captions, and official artist sites.
+        3. **IDENTIFY**: First, verify the correct Artist and Title.
+        4. **EXTRACT**: 
+           - Get the COMPLETE original lyrics.
+           - FOR NON-LATIN SONGS (K-Pop, J-Pop, Thai, etc.): YOU MUST PROVIDE THE ORIGINAL SCRIPT (Hangul/Kanji/Thai) AND Romanization if possible.
+           - Ensure structure (Verse, Chorus) is preserved.
+        5. **FORMAT**: 
+        
+        Title: [Song Title]
+        Artist: [Artist Name]
+        
+        [Full Lyrics Body]
+        `;
+
         const response = await client.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: `Find the lyrics for: "${query}". If it's a URL, find the song lyrics. Return the full lyrics.`,
+            contents: prompt,
             config: {
-                tools: [{ googleSearch: {} }]
+                tools: [{ googleSearch: {} }] // Enable Google Search for accuracy
             }
         });
         
-        const lyrics = response.text || "Lirik tidak ditemukan.";
+        const lyrics = response.text || "Lirik tidak ditemukan. Pastikan judul atau link benar.";
+        
+        // Extract sources from grounding metadata if available
         const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks?.map((c: any) => c.web).filter(Boolean) || [];
         
         return { lyrics, sources };
@@ -493,7 +528,7 @@ export async function generateUGCScripts(
                - ${productBehaviorInstruction}
                - PRODUCT DETAIL INSTRUCTIONS: ${productDesc || 'Match the appearance of the product image provided.'}
                - Ensure product appearance matches reference exactly.
-               - Scenes: Hook -> Problem -> Solution -> Social Proof -> CTA.`
+               - Scenes: Hook -> Problem -> Solution -> Social Proof -> CTA (Visual Only, NO TEXT).`
             : 'Focus on a cohesive personal lifestyle vlog.';
 
         const promptText = `Create a 7-scene video script sequence (vertical 9:16) based on: "${scenario}".
@@ -504,10 +539,13 @@ export async function generateUGCScripts(
             VISUAL CONSISTENCY RULES:
                - CHARACTER BASE: "${characterDesc || 'The main subject'}".
                - INSTRUCTION: In EVERY 'visual_prompt', REPEAT the character's physical description.
+               - STRICTLY NO TEXT DESCRIPTIONS: The 'visual_prompt' MUST NOT contain words like "text", "words", "caption", "sign", "overlay", "title", "logo".
+               - FOR SCENE 7 (CTA): Describe a physical action (e.g., character pointing, waving, smiling, thumbs up) WITHOUT any background text or floating words.
+               - IMPORTANT: Keep visual prompts concise (under 50 words) to prevent token overflow, but descriptive enough for generation.
 
             CRITICAL OUTPUT RULES:
             1. Output strictly a JSON ARRAY of 7 objects.
-            2. "visual_prompt": Detailed English prompt for Image Gen AI.
+            2. "visual_prompt": Detailed but efficient English prompt for Image Gen AI (PURE VISUALS ONLY).
             3. "spoken_script": Natural, viral-style voiceover in ${language}.
             4. "background_sound": Audio mood/sfx suggestion.
             
@@ -546,38 +584,3 @@ export async function generateUGCScripts(
         return json;
     });
 }
-
-export async function generateVeoVideo(prompt: string, model: string, aspectRatio: string, resolution: string, imageBase64?: string): Promise<string> {
-    return callWithApiKeyRotation(async (client, key) => {
-        const params: any = {
-            model: model,
-            prompt: `${prompt} (Cinematic, high quality. STRICTLY NO TEXT OVERLAYS, NO WATERMARKS, NO LOGOS, NO TYPOGRAPHY, CLEAN VIDEO)`,
-            config: {
-                numberOfVideos: 1,
-                resolution: resolution,
-                aspectRatio: aspectRatio
-            }
-        };
-
-        if (imageBase64) {
-            const resizedImage = await resizeImageBase64(imageBase64, 512);
-            params.image = {
-                imageBytes: resizedImage.split(',')[1],
-                mimeType: 'image/jpeg'
-            };
-        }
-
-        let operation = await client.models.generateVideos(params);
-        
-        while (!operation.done) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            operation = await client.operations.getVideosOperation({operation: operation});
-        }
-        
-        const uri = operation.response?.generatedVideos?.[0]?.video?.uri;
-        if (!uri) throw new Error("Video generation failed.");
-        
-        return `${uri}&key=${key}`;
-    });
-}
-    

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import JSZip from 'jszip';
 import { Header } from './components/Header';
@@ -9,18 +8,17 @@ import { ImageAffiliateView } from './components/ImageAffiliateView';
 import { AboutView } from './components/AboutView';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { MusicLyricView } from './components/MusicLyricView';
-import { VideoGeneratorView } from './components/VideoGeneratorView';
 import { TabButton } from './components/common/TabButton';
 import { Spinner } from './components/common/Spinner';
 import { GENRES, INITIAL_IDEAS_COUNT, VOICE_OPTIONS, UGC_LANGUAGES, LYRIC_LANGUAGES } from './constants';
 import { 
     Genre, StoryIdea, GeneratedImage, CharacterImageData, Gender, 
-    View, Voice, AspectRatio, LyricLine, VeoModel, VideoResolution, ProductCategory 
+    View, Voice, AspectRatio, LyricLine, ProductCategory 
 } from './types';
 import { 
     setApiKeys, generateFullStory, generateStoryScenes, 
     generateStoryIdeas, polishStoryText, generateImage, generateSpeech,
-    generateLyrics, translateLyrics, generateUGCScripts, generateVeoVideo
+    generateLyrics, translateLyrics, generateUGCScripts
 } from './services/geminiService';
 import { pcmToWavBlob, decodeBase64 } from './utils/audio';
 
@@ -104,10 +102,6 @@ export const App: React.FC = () => {
     const [isTranslatingLyrics, setIsTranslatingLyrics] = useState(false);
     const [lyricSources, setLyricSources] = useState<{ title: string; uri: string }[]>([]);
     const [selectedLyricLanguage, setSelectedLyricLanguage] = useState('Indonesian');
-
-    // Video Generator State
-    const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
-    const [generatedVideoUrl, setGeneratedVideoUrl] = useState<string | null>(null);
 
     // Security: Prevent Right Click and DevTools
     useEffect(() => {
@@ -233,12 +227,17 @@ export const App: React.FC = () => {
     };
 
     const handleApiError = (err: any) => {
-        const errorMessage = err?.message || JSON.stringify(err);
+        const errorMessage = (err?.message || JSON.stringify(err)).toLowerCase();
+        // Enhanced error detection for common API key or quota issues
         if (
             err.name === "AllApiKeysFailedError" || 
             errorMessage.includes("429") || 
             errorMessage.includes("quota") ||
-            errorMessage.includes("RESOURCE_EXHAUSTED")
+            errorMessage.includes("resource_exhausted") ||
+            errorMessage.includes("api key") ||
+            errorMessage.includes("403") ||
+            errorMessage.includes("400") ||
+            errorMessage.includes("fetch failed")
         ) {
             setShowApiKeyModal(true);
         }
@@ -290,7 +289,7 @@ export const App: React.FC = () => {
             setStoryText(polished);
         } catch (e) {
             console.error(e);
-            alert('Gagal memoles cerita.');
+            alert('Gagal memoles cerita. Periksa Koneksi/API Key.');
             handleApiError(e);
         } finally {
             setIsPolishing(false);
@@ -564,6 +563,7 @@ export const App: React.FC = () => {
                     });
                 } catch (err) {
                     console.error(`Failed UGC image ${i}`, err);
+                    handleApiError(err);
                     setUgcGeneratedImages(prev => {
                         const newImages = [...prev];
                         if (newImages[i]) {
@@ -631,34 +631,6 @@ export const App: React.FC = () => {
         }
     };
 
-     const handleVeoGenerate = async (prompt: string, aspectRatio: AspectRatio, model: VeoModel, resolution: VideoResolution, image: CharacterImageData | null) => {
-        setIsGeneratingVideo(true);
-        setGeneratedVideoUrl(null);
-        try {
-            const videoUri = await generateVeoVideo(
-                prompt, 
-                model, 
-                aspectRatio, 
-                resolution, 
-                image?.base64
-            );
-            
-            const res = await fetch(videoUri);
-            if (!res.ok) throw new Error("Failed to fetch video content");
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            
-            setGeneratedVideoUrl(url);
-
-        } catch (e) {
-            console.error(e);
-            alert('Gagal membuat video: ' + (e as Error).message);
-            handleApiError(e);
-        } finally {
-            setIsGeneratingVideo(false);
-        }
-    };
-
     const handleGetLyrics = async () => {
         if (!youtubeUrl) return;
         setIsFetchingLyrics(true);
@@ -719,7 +691,6 @@ export const App: React.FC = () => {
                     <TabButton name="Generator Cerita" active={view === 'wizard' || view === 'storybook'} onClick={() => setView('wizard')} />
                     <TabButton name="UGC Img & Prompt" active={view === 'imageAffiliate'} onClick={() => setView('imageAffiliate')} />
                     <TabButton name="Lirik & Musik" active={view === 'musicLyric'} onClick={() => setView('musicLyric')} />
-                    <TabButton name="Video Generator" active={view === 'videoGenerator'} onClick={() => setView('videoGenerator')} />
                     <TabButton name="Tentang" active={view === 'about'} onClick={() => setView('about')} />
                 </nav>
 
@@ -808,15 +779,6 @@ export const App: React.FC = () => {
                         />
                     )}
 
-                     {view === 'videoGenerator' && (
-                        <VideoGeneratorView
-                            isGenerating={isGeneratingVideo}
-                            onGenerate={handleVeoGenerate}
-                            videoUrl={generatedVideoUrl}
-                            onReset={() => setGeneratedVideoUrl(null)}
-                        />
-                    )}
-
                     {view === 'about' && <AboutView />}
                     
                     {isGeneratingStory && (
@@ -834,4 +796,3 @@ export const App: React.FC = () => {
         </div>
     );
 };
-    
