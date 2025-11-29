@@ -1,5 +1,6 @@
+
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { Gender, AspectRatio, ProductCategory } from '../types';
+import { Gender, AspectRatio, ProductCategory, LyricLine } from '../types';
 
 let apiKeys: string[] = [];
 
@@ -7,14 +8,24 @@ export function setApiKeys(keys: string[]) {
     apiKeys = keys;
 }
 
-// Helper to extract error message robustly from various error objects/formats
+// Helper to extract error message robustly
 function getErrorMessage(error: any): string {
+    if (!error) return "Unknown Error";
     if (typeof error === 'string') return error;
     if (error instanceof Error) return error.message;
-    // Handle the specific JSON error object structure usually returned by the proxy
-    // {"error":{"code":500,"message":"...","status":"UNKNOWN"}}
-    if (error?.error?.message) return error.error.message;
-    if (error?.message) return error.message;
+    
+    if (error.error) {
+        const code = error.error.code ? `[${error.error.code}] ` : '';
+        const status = error.error.status ? `[${error.error.status}] ` : '';
+        const msg = error.error.message || JSON.stringify(error.error);
+        return `${code}${status}${msg}`;
+    }
+
+    if (error.code && error.message && error.status) {
+        return `[${error.code}] [${error.status}] ${error.message}`;
+    }
+
+    if (error.message) return error.message;
     
     try {
         return JSON.stringify(error);
@@ -23,8 +34,7 @@ function getErrorMessage(error: any): string {
     }
 }
 
-// Helper to resize image to reduce payload size and prevent RPC errors
-// Reduced default to 256px for reference images to speed up processing
+// Helper to resize image
 async function resizeImageBase64(base64Str: string, maxWidth = 256): Promise<string> {
     if (!base64Str || !base64Str.startsWith('data:image')) return base64Str;
     
@@ -53,7 +63,6 @@ async function resizeImageBase64(base64Str: string, maxWidth = 256): Promise<str
             const ctx = canvas.getContext('2d');
             if (ctx) {
                 ctx.drawImage(img, 0, 0, width, height);
-                // Compress to JPEG 0.5 to significantly reduce size
                 resolve(canvas.toDataURL('image/jpeg', 0.5));
             } else {
                 resolve(base64Str);
@@ -64,38 +73,72 @@ async function resizeImageBase64(base64Str: string, maxWidth = 256): Promise<str
     });
 }
 
+// Helper for simple retry without rotation (used for fixed-key operations like Veo)
+async function retryOperation<T>(fn: () => Promise<T>, retries = 3, operationName = "Operation"): Promise<T> {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (error: any) {
+            const msg = getErrorMessage(error);
+            const isTransient = msg.includes("Rpc failed") || 
+                                msg.includes("xhr error") || 
+                                msg.includes("fetch failed") || 
+                                msg.includes("503") ||
+                                msg.includes("error code: 6");
+
+            if (isTransient) {
+                console.warn(`${operationName} failed (Attempt ${i + 1}/${retries}): ${msg}. Retrying...`);
+                if (i === retries - 1) throw error;
+                await new Promise(r => setTimeout(r, 2000 * (i + 1))); // Exponential backoff
+            } else {
+                throw error; // Non-retriable error
+            }
+        }
+    }
+    throw new Error(`${operationName} failed after ${retries} retries`);
+}
+
 async function callWithApiKeyRotation<T>(operation: (client: GoogleGenAI, key: string) => Promise<T>): Promise<T> {
     const keysToTry = apiKeys.length > 0 ? apiKeys : [process.env.API_KEY || ''];
     let lastError: any;
     
     for (const key of keysToTry) {
         if (!key) continue;
-        try {
-            const client = new GoogleGenAI({ apiKey: key });
-            return await operation(client, key);
-        } catch (error: any) {
-            const errorMessage = getErrorMessage(error);
-            
-            // Retry on specific RPC or XHR errors which are often transient
-            const isTransient = errorMessage.includes("Rpc failed") || 
-                               errorMessage.includes("xhr error") || 
-                               errorMessage.includes("fetch failed") ||
-                               errorMessage.includes("500") ||
-                               errorMessage.includes("503");
+        
+        // Retry logic loop for the CURRENT key
+        const maxRetriesPerKey = 3;
+        for (let attempt = 0; attempt < maxRetriesPerKey; attempt++) {
+            try {
+                const client = new GoogleGenAI({ apiKey: key });
+                return await operation(client, key);
+            } catch (error: any) {
+                const errorMessage = getErrorMessage(error);
+                
+                const isTransient = errorMessage.includes("Rpc failed") || 
+                                   errorMessage.includes("xhr error") || 
+                                   errorMessage.includes("fetch failed") ||
+                                   errorMessage.includes("500") ||
+                                   errorMessage.includes("503") ||
+                                   errorMessage.includes("error code: 6");
 
-            if (isTransient) {
-                 console.warn(`Transient network error with key ${key.substring(0,5)}...: ${errorMessage}. Retrying...`);
-                 // Add a small delay before retrying to allow connection to reset
-                 await new Promise(resolve => setTimeout(resolve, 1500));
-            } else {
-                 console.warn("API Call failed with key", key.substring(0, 5) + "...", errorMessage);
+                if (isTransient) {
+                     console.warn(`Transient error on key ${key.substring(0,5)}... (Attempt ${attempt + 1}): ${errorMessage}. Retrying...`);
+                     if (attempt < maxRetriesPerKey - 1) {
+                         await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+                         continue; // Retry same key
+                     }
+                } else {
+                     // If it's not transient (e.g. 400 Bad Request, Quota Exceeded for this key), break inner loop to try next key
+                     console.warn("API Call failed with key", key.substring(0, 5) + "...", errorMessage);
+                     lastError = error;
+                     break; 
+                }
+                lastError = error;
             }
-            lastError = error;
         }
     }
     
     const finalErrorMessage = getErrorMessage(lastError);
-    // Explicitly check for empty key scenarios common in GitHub deployments
     if (finalErrorMessage.includes("API key not valid") || keysToTry.every(k => !k)) {
         throw new Error("API Key hilang atau tidak valid. Silakan atur di tombol 'Gerigi' di pojok kanan atas.");
     }
@@ -104,31 +147,21 @@ async function callWithApiKeyRotation<T>(operation: (client: GoogleGenAI, key: s
 
 function cleanJsonText(text: string): string {
     if (!text) return "[]";
-    // Remove markdown code blocks more aggressively and trim
     let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
     
-    // Find the first [ or {
     const firstOpen = cleaned.search(/\[|\{/);
     if (firstOpen !== -1) {
         cleaned = cleaned.substring(firstOpen);
-        
-        // Try to find the matching closing bracket/brace at the end
         const isArray = cleaned.startsWith('[');
-        
         if (isArray) {
-            // For arrays, find the last closing object brace '}' inside it, 
-            // in case the array itself is truncated (missing ']')
             const lastObjClose = cleaned.lastIndexOf('}');
             if (lastObjClose !== -1) {
-                // Cut off after the last complete object and ensure it ends with ]
-                // This handles cases where the JSON stream was cut off mid-object or mid-array
                 let candidate = cleaned.substring(0, lastObjClose + 1);
                 if (!candidate.endsWith(']')) {
                     candidate += ']';
                 }
                 return candidate;
             } else {
-                // If no object closing found, return empty array to be safe
                 return "[]";
             }
         } else {
@@ -138,7 +171,6 @@ function cleanJsonText(text: string): string {
              }
         }
     }
-    
     return cleaned;
 }
 
@@ -147,17 +179,12 @@ function safeJsonParse(text: string, fallback: any) {
     try {
         return JSON.parse(cleaned);
     } catch (e) {
-        // Truncate long error logs for readability
         const errorSnippet = text.length > 500 ? text.substring(0, 200) + '... [TRUNCATED]' : text;
         console.error(`JSON Parse Failed. Length: ${text.length}. Snippet: ${errorSnippet}`);
-        
-        // Attempt aggressive recovery for simple arrays
         if (cleaned.startsWith('[')) {
-            // Try closing it if it looks like a valid start
             try { return JSON.parse(cleaned + ']'); } catch (e2) {}
             try { return JSON.parse(cleaned + '}]'); } catch (e3) {}
         }
-        
         return fallback;
     }
 }
@@ -191,45 +218,84 @@ export async function polishStoryText(text: string): Promise<string> {
     });
 }
 
-export async function generateFullStory(storyText: string, genre: string, gender: Gender): Promise<string> {
+export async function generateFullStory(storyText: string, genre: string, gender: Gender, sceneCount: number = 10): Promise<string> {
     return callWithApiKeyRotation(async (client) => {
         const genderContext = gender === 'male' ? 'laki-laki' : gender === 'female' ? 'perempuan' : '';
+        
+        // Define structure based on requested scene count
+        let structure = "";
+        if (sceneCount === 5) {
+             structure = `
+            STRUKTUR 5 BABAK (Short Story):
+            1. Pengenalan (Intro)
+            2. Insiden Pemicu (Inciting Incident)
+            3. Konflik Meningkat (Rising Action)
+            4. Klimaks (Climax)
+            5. Resolusi (Resolution)`;
+        } else if (sceneCount === 15) {
+            structure = `
+            STRUKTUR 15 BABAK (Extended Epic):
+            1. Dunia Biasa
+            2. Panggilan Petualangan
+            3. Penolakan
+            4. Pertemuan Mentor
+            5. Menyeberangi Batas
+            6. Sekutu & Musuh
+            7. Pendekatan Gua Terdalam
+            8. Cobaan Berat (Ordeal)
+            9. Hadiah (Reward)
+            10. Jalan Pulang
+            11. Kebangkitan (Resurrection)
+            12. Klimaks Puncak
+            13. Akibat Klimaks
+            14. Resolusi Akhir
+            15. Elixir / Pesan Moral`;
+        } else {
+            // Default 10
+            structure = `
+            STRUKTUR 10 BABAK (Standard):
+            1. Pendahuluan
+            2. Kehidupan Normal
+            3. Pemicu Masalah
+            4. Keraguan & Panggilan
+            5. Memulai Perjalanan
+            6. Tantangan & Sekutu
+            7. Titik Tengah
+            8. Krisis Berat
+            9. Klimaks Epik
+            10. Resolusi`;
+        }
+
         const response = await client.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: `Tulis cerita lengkap yang menarik dan terstruktur dengan baik berdasarkan plot berikut: "${storyText}". Genre: ${genre}. ${genderContext ? `Karakter utama adalah ${genderContext}.` : ''} 
             
-            INSTRUKSI KHUSUS (STRUKTUR 8 BABAK):
-            Agar cerita memiliki alur yang pas untuk 8 adegan visual, gunakan struktur berikut:
-            1. Pendahuluan: Pengenalan karakter dan dunia mereka.
-            2. Pemicu: Masalah atau tantangan muncul (Inciting Incident).
-            3. Reaksi: Karakter mulai bertindak menghadapi masalah.
-            4. Pendalaman: Tantangan meningkat atau perjalanan berlanjut (Rising Action).
-            5. Titik Tengah: Sebuah twist, kegagalan, atau penemuan penting.
-            6. Krisis: Situasi tampak paling sulit atau gelap.
-            7. Klimaks: Puncak konflik atau pertarungan utama.
-            8. Resolusi: Penyelesaian masalah dan akhir cerita.
+            INSTRUKSI KHUSUS:
+            Agar cerita memiliki alur yang pas untuk ${sceneCount} adegan visual, gunakan struktur berikut:
+            ${structure}
 
-            Tulis dalam bahasa Indonesia yang deskriptif dan menggugah imajinasi, pastikan transisi antar bagian mengalir mulus.`,
+            Tulis dalam bahasa Indonesia yang deskriptif dan emosional. Pastikan setiap babak jelas perbedaannya.`,
         });
         return (response.text || "").trim();
     });
 }
 
-export async function generateStoryScenes(fullStory: string, characterDesc: string = ''): Promise<{ imagePrompt: string; narration: string }[]> {
+export async function generateStoryScenes(fullStory: string, characterDesc: string = '', sceneCount: number = 10): Promise<{ imagePrompt: string; narration: string }[]> {
     return callWithApiKeyRotation(async (client) => {
         const response = await client.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: `Analisis cerita berikut dan bagi menjadi TEPAT 8 adegan kunci.
+            contents: `Analisis cerita berikut dan bagi menjadi TEPAT ${sceneCount} adegan kunci berurutan.
             
-            PENTING - KONSISTENSI KARAKTER & VISUAL (CRITICAL):
+            PENTING - OPTIMASI UNTUK VIDEO GENERATOR (VEO 3):
             1. Deskripsi Karakter Basis: "${characterDesc || 'A main character'}".
-            2. INSTRUCTION: In EVERY output "imagePrompt", you MUST include the full physical description of the character (hair color, clothes, face features).
-            3. Example: "A young man with messy red hair wearing a black leather jacket..." (Repeat this in every prompt).
-            4. Maintain consistent setting and atmosphere.
+            2. INSTRUCTION: In EVERY output "imagePrompt", you MUST create a CINEMATIC VIDEO PROMPT optimized for Google Veo 3, but write it in **BAHASA INDONESIA** (Indonesian Language).
+               - Include CAMERA MOVEMENT instructions (keep these technical terms in English like "Slow dolly in", "Drone shot", "Pan right", "Tracking shot").
+               - Describe ACTION and MOVEMENT of the character/environment vividly in INDONESIAN (e.g. "sedang berjalan percaya diri", "hujan turun deras", "rambut tertiup angin").
+               - Style: 8k, Photorealistic, Cinematic Lighting, 35mm film grain.
             
-            Untuk setiap adegan (Total 8), berikan JSON:
-            1. "imagePrompt": Prompt bahasa Inggris yang SANGAT DETIL dan KONSISTEN secara visual.
-            2. "narration": Teks narasi bahasa Indonesia (2-3 kalimat).
+            Untuk setiap adegan (Total ${sceneCount}), berikan JSON:
+            1. "imagePrompt": Prompt VIDEO dalam BAHASA INDONESIA yang SANGAT DETIL (Veo 3 Optimized). Gunakan istilah teknis kamera dalam Inggris jika perlu.
+            2. "narration": Teks Voice Over bahasa Indonesia (Jelas, Emosional, cocok untuk dibacakan).
             
             CERITA:\n${fullStory}`,
             config: {
@@ -249,7 +315,7 @@ export async function generateStoryScenes(fullStory: string, characterDesc: stri
         });
         const json = safeJsonParse(response.text || "[]", []);
         if (!Array.isArray(json) || json.length === 0) throw new Error("Gagal menghasilkan adegan cerita (Invalid JSON).");
-        return json;
+        return json.slice(0, sceneCount); // Ensure exact count
     });
 }
 
@@ -257,38 +323,21 @@ export async function generateImage(prompt: string, aspectRatio: AspectRatio, re
     return callWithApiKeyRotation(async (client) => {
         const ratio = aspectRatio === '16:9' ? '16:9' : '9:16'; 
         
-        // Enhanced Prompt Logic for Strict Consistency
         let consistencyPrompt = "";
         if (referenceImages.length > 0) {
              consistencyPrompt = `
-             STRICT REFERENCE ADHERENCE INSTRUCTIONS:
-             You have been provided with reference image(s) acting as the Absolute Source of Truth.
-             
-             1. CHARACTER LOCK (Face & Body):
-                - The output image MUST depict the EXACT SAME person as in the reference (Same face shape, eyes, hair, body type).
-                - Maintain consistent ethnicity and age.
-                - KEEP THE SAME CLOTHES unless explicitly told to change.
-             
-             2. PRODUCT LOCK (Object Identity):
-                - If a product reference is provided, it MUST appear exactly as shown (same packaging, color, logo).
-                
-             3. CONTEXT AWARE INTERACTION (Crucial):
-                - Follow the prompt's verb strictly (WEARING vs HOLDING vs RIDING).
-                - Do NOT deviate from the action described in the prompt.
+             STRICT REFERENCE ADHERENCE:
+             - The output image MUST depict the EXACT SAME person/product as in the reference.
+             - Maintain consistent face, body, clothes, colors.
              `;
         }
 
         const enhancedPrompt = `VISUAL PROMPT: ${prompt}
-        
         ${consistencyPrompt}
-        
-        STYLE: Professional Commercial Photography, 8k resolution, highly detailed, viral social media aesthetic, perfect lighting, sharp focus, depth of field, photorealistic.
-        
-        NEGATIVE PROMPT: text, writing, letters, words, alphabet, watermark, logo, signature, subtitles, captions, typography, brand name, label, ui, interface, menu, buttons, speech bubble, thought bubble, cartoon, illustration, painting, distorted face, bad hands, extra fingers, blurry, low quality, ugly, distorted text, text overlay, morphing, changing clothes, different face, sign, poster, billboard.`;
+        STYLE: Professional Commercial Photography, 8k resolution, highly detailed, perfect lighting, cinematic composition.`;
 
         const parts: any[] = [];
         
-        // Aggressively resize to 256px max for references to ensure successful request and speed
         if (referenceImages.length > 0) {
              const resizedRefs = await Promise.all(referenceImages.map(img => resizeImageBase64(img, 256)));
              resizedRefs.forEach(base64 => {
@@ -306,81 +355,27 @@ export async function generateImage(prompt: string, aspectRatio: AspectRatio, re
 
         parts.push({ text: enhancedPrompt });
 
-        let attempt = 0;
-        const maxAttempts = 5; // Increased attempts to handle 429s better
+        const response = await client.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: { parts: parts },
+            config: { imageConfig: { aspectRatio: ratio } }
+        });
 
-        while (attempt < maxAttempts) {
-            try {
-                // Increased timeout wrapper - 90s to allow queue processing
-                const timeoutPromise = new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error("API Request Timeout")), 90000)
-                );
-
-                const response = await Promise.race([
-                    client.models.generateContent({
-                        model: 'gemini-2.5-flash-image',
-                        contents: {
-                            parts: parts
-                        },
-                        config: {
-                            imageConfig: {
-                                aspectRatio: ratio
-                            }
-                        }
-                    }),
-                    timeoutPromise
-                ]) as any;
-
-                if (response.candidates && response.candidates[0].content.parts) {
-                    for (const part of response.candidates[0].content.parts) {
-                        if (part.inlineData) {
-                            return `data:image/png;base64,${part.inlineData.data}`;
-                        }
-                    }
-                    // If we reach here, no inlineData was found. Check for text (often a safety refusal).
-                    const textPart = response.candidates[0].content.parts.find((p: any) => p.text);
-                    if (textPart) {
-                         // Check for refusal
-                         if (textPart.text.toLowerCase().includes("safety") || textPart.text.toLowerCase().includes("unsafe")) {
-                             throw new Error("Gambar ditolak oleh filter keamanan (Safety Filter). Coba ubah prompt.");
-                         }
-                        throw new Error(`Model Refused: ${textPart.text}`);
-                    }
+        if (response.candidates && response.candidates[0].content.parts) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.inlineData) {
+                    return `data:image/png;base64,${part.inlineData.data}`;
                 }
-                throw new Error("No image data returned (Empty response)");
-            } catch (err: any) {
-                const errMsg = getErrorMessage(err);
-                console.warn(`Generate image attempt ${attempt + 1} failed:`, errMsg);
-                
-                // If safety error, do not retry, just throw
-                if (errMsg.includes("Safety Filter") || errMsg.includes("unsafe")) {
-                    throw new Error(errMsg);
-                }
-
-                attempt++;
-                
-                const isRateLimit = 
-                    errMsg.includes('429') || 
-                    errMsg.includes('RESOURCE_EXHAUSTED') ||
-                    errMsg.includes('quota');
-                
-                const isRpcError = 
-                    errMsg.includes('Rpc failed') || 
-                    errMsg.includes('xhr error') ||
-                    errMsg.includes('fetch failed') ||
-                    errMsg.includes('Timeout') ||
-                    errMsg.includes('500');
-
-                if (attempt === maxAttempts) throw new Error(`Gagal setelah ${maxAttempts} percobaan: ${errMsg}`);
-                
-                // Dynamic backoff: 
-                // Rate limit: start at 15s + attempt * 5s 
-                const delay = isRateLimit ? 15000 + (attempt * 5000) : isRpcError ? 5000 : 4000;
-                console.log(`Waiting ${delay}ms before retry...`);
-                await new Promise(r => setTimeout(r, delay));
+            }
+            const textPart = response.candidates[0].content.parts.find((p: any) => p.text);
+            if (textPart) {
+                 if (textPart.text.toLowerCase().includes("safety") || textPart.text.toLowerCase().includes("unsafe")) {
+                     throw new Error("Gambar ditolak oleh filter keamanan (Safety Filter). Coba ubah prompt.");
+                 }
+                throw new Error(`Model Refused: ${textPart.text}`);
             }
         }
-        throw new Error("Gagal menghasilkan gambar setelah beberapa percobaan.");
+        throw new Error("No image data returned");
     });
 }
 
@@ -388,9 +383,9 @@ export async function generateSpeech(text: string, voice: string): Promise<strin
     return callWithApiKeyRotation(async (client) => {
         const response = await client.models.generateContent({
             model: 'gemini-2.5-flash-preview-tts',
-            contents: [{
+            contents: {
                 parts: [{ text: text }]
-            }],
+            },
             config: {
                 responseModalities: [Modality.AUDIO],
                 speechConfig: {
@@ -400,66 +395,121 @@ export async function generateSpeech(text: string, voice: string): Promise<strin
                 }
             }
         });
-
-        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        if (!base64Audio) {
-            console.error("Response does not contain audio data.");
-            throw new Error("Tidak ada audio yang dihasilkan.");
-        }
-        return base64Audio;
+        
+        const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (!audioData) throw new Error("Gagal menghasilkan audio (No data).");
+        return audioData;
     });
 }
 
-export async function generateLyrics(query: string): Promise<{ lyrics: string, sources: any[] }> {
+export async function generateUGCScripts(
+    prompt: string, 
+    language: string, 
+    characterDesc: string, 
+    productDesc: string, 
+    includeProduct: boolean,
+    productImage: string | undefined,
+    productCategory: ProductCategory,
+    shotType: string
+): Promise<any[]> {
     return callWithApiKeyRotation(async (client) => {
-        // Robust prompt for accurate searching and extraction with WORLDWIDE scope
-        const prompt = `
-        You are the Ultimate World Music Archivist. Your capabilities extend to EVERY corner of the internet.
-        USER REQUEST: "Mengelilingi seluruh sumber yang ada di dunia karena yang aku butuhkan semua lagu dari seluruh dunia" (Cover all sources in the world, need all songs from around the world).
+        let shotInstruction = shotType;
+        if (shotType === 'hand_focus') {
+             shotInstruction = "EXTREME CLOSE-UP on HANDS ONLY holding/using/touching the product. Do NOT show faces. Focus on skin texture, grip, and the product details. POV style is acceptable.";
+        }
+
+        const baseContext = `You are a professional UGC Video Director. 
+        Create exactly 6 distinct scenes for a viral short video.
         
-        QUERY: "${query}".
-        
-        MISSION:
-        1. **GLOBAL HUNT**: Search Indonesia, Asia (Japan, Korea, China, Thailand), West, Latin, Arab, Africa. No boundaries.
-        2. **SOURCE CHECK**: Scan Genius, Musixmatch, KapanLagi, Melon, Uta-Net, Vagalume, Anghami, YouTube Captions, and official artist sites.
-        3. **IDENTIFY**: First, verify the correct Artist and Title.
-        4. **EXTRACT**: 
-           - Get the COMPLETE original lyrics.
-           - FOR NON-LATIN SONGS (K-Pop, J-Pop, Thai, etc.): YOU MUST PROVIDE THE ORIGINAL SCRIPT (Hangul/Kanji/Thai) AND Romanization if possible.
-           - Ensure structure (Verse, Chorus) is preserved.
-        5. **FORMAT**: 
-        
-        Title: [Song Title]
-        Artist: [Artist Name]
-        
-        [Full Lyrics Body]
+        CONTEXT:
+        - Character: ${characterDesc || 'A person'}
+        - Product: ${includeProduct ? productDesc : 'None'}
+        - Product Category: ${productCategory}
+        - Shot Type Preference: ${shotInstruction}
+        - Overall Theme: ${prompt}
+
+        CRITICAL REQUIREMENTS (8 SECONDS RULE):
+        1. DURATION: Each scene must be designed to last exactly 8 SECONDS.
+        2. SCRIPT: The Voice Over must be in INDONESIAN (Bahasa Indonesia) and concise (secukupnya) but meaningful. Target approx 15-20 words per scene to fit the 8-second timing comfortably.
+        3. VISUALS: Describe a cinematic action that takes time (e.g., "Slow pan", "Walking towards camera", "Rotating product").
+        ${shotType === 'hand_focus' ? "4. VISUAL CONSTRAINT: FOCUS ON HANDS. Do not generate scenes with full body or faces." : ""}
+
+        Return a JSON ARRAY of 6 objects. Each object must have:
+        1. "visual_prompt": A highly detailed English prompt for video generation (Veo/Runway).
+           - Explicitly mention "8 seconds duration" or "slow motion" style.
+           - Enforce Shot Type: ${shotInstruction}.
+        2. "spoken_script": Indonesian Voice Over text (approx 2 sentences, ~8 seconds spoken duration).
         `;
 
         const response = await client.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: prompt,
+            contents: baseContext,
             config: {
-                tools: [{ googleSearch: {} }] // Enable Google Search for accuracy
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            visual_prompt: { type: Type.STRING },
+                            spoken_script: { type: Type.STRING }
+                        },
+                        required: ["visual_prompt", "spoken_script"]
+                    }
+                }
             }
         });
-        
-        const lyrics = response.text || "Lirik tidak ditemukan. Pastikan judul atau link benar.";
-        
-        // Extract sources from grounding metadata if available
-        const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks?.map((c: any) => c.web).filter(Boolean) || [];
-        
-        return { lyrics, sources };
+
+        const json = safeJsonParse(response.text || "[]", []);
+        if (!Array.isArray(json) || json.length < 1) throw new Error("Failed to generate scripts");
+        return json.slice(0, 6);
     });
 }
 
-export async function translateLyrics(text: string, targetLanguage: string): Promise<{original: string, translated: string}[]> {
+export async function generateLyrics(urlOrTitle: string): Promise<{lyrics: string, sources: any[]}> {
+     return callWithApiKeyRotation(async (client) => {
+        const response = await client.models.generateContent({
+           model: "gemini-2.5-flash",
+           contents: `Find the exact lyrics for this song: "${urlOrTitle}".
+           If it's a YouTube URL, identify the song first.
+           
+           Return the lyrics formatted with structure tags like [Verse 1], [Chorus], [Bridge].
+           Do NOT include chords.
+           Do NOT include translation yet.
+           Just the original lyrics in their original language.`,
+           config: {
+             tools: [{googleSearch: {}}],
+           },
+        });
+
+        const lyrics = response.text || "Lyrics not found.";
+        const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks?.map((c: any) => ({
+            title: c.web?.title || 'Source',
+            uri: c.web?.uri || '#'
+        })) || [];
+
+        return { lyrics, sources };
+     });
+}
+
+export async function translateLyrics(lyrics: string, targetLanguage: string): Promise<LyricLine[]> {
     return callWithApiKeyRotation(async (client) => {
         const response = await client.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: `Translate the following lyrics to ${targetLanguage}. Return a JSON array of objects with 'original' and 'translated' keys.
+            contents: `Translate the following song lyrics to ${targetLanguage}.
+            Maintain the line-by-line structure exactly.
             
-            LYRICS:
-            ${text}`,
+            INPUT LYRICS:
+            ${lyrics}
+            
+            OUTPUT FORMAT:
+            Return a JSON ARRAY of objects:
+            [
+              { "original": "Original line 1", "translated": "Translated line 1" },
+              { "original": "[Chorus]", "translated": "[Reff]" },
+              ...
+            ]
+            `,
             config: {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -469,178 +519,78 @@ export async function translateLyrics(text: string, targetLanguage: string): Pro
                         properties: {
                             original: { type: Type.STRING },
                             translated: { type: Type.STRING }
-                        }
+                        },
+                        required: ["original", "translated"]
                     }
                 }
             }
         });
+        
         return safeJsonParse(response.text || "[]", []);
     });
 }
 
-export async function generateUGCScripts(
-    scenario: string, 
-    language: string, 
-    characterDesc: string = '', 
-    productDesc: string = '',
-    includeProduct: boolean = false, 
-    productImageBase64?: string,
-    productCategory: ProductCategory = 'general'
-): Promise<any[]> {
+export async function optimizeVideoPrompt(simpleIdea: string): Promise<string> {
     return callWithApiKeyRotation(async (client) => {
-        const parts: any[] = [];
-
-        // 1. Multimodal Analysis
-        if (includeProduct && productImageBase64) {
-             const resizedProduct = await resizeImageBase64(productImageBase64, 256);
-             const match = resizedProduct.match(/^data:(.+);base64,(.+)$/);
-             if (match) {
-                parts.push({
-                    inlineData: {
-                        mimeType: match[1],
-                        data: match[2]
-                    }
-                });
-             }
-        }
-
-        // 2. Product Instructions
-        let productBehaviorInstruction = "";
-        if (includeProduct) {
-            switch (productCategory) {
-                case 'clothing':
-                    productBehaviorInstruction = "ACTION: The character MUST be WEARING the product on their body. Do NOT hold it.";
-                    break;
-                case 'perfume_skincare':
-                    productBehaviorInstruction = "ACTION: The character MUST be HOLDING the bottle in hand or APPLYING it.";
-                    break;
-                case 'vehicle':
-                    productBehaviorInstruction = "ACTION: The character MUST be RIDING or DRIVING the vehicle.";
-                    break;
-                case 'footwear':
-                    productBehaviorInstruction = "ACTION: The character MUST be WEARING the shoes on their feet.";
-                    break;
-                case 'headwear':
-                    productBehaviorInstruction = "ACTION: The character MUST be WEARING the hat/helmet on their head.";
-                    break;
-                case 'eyewear':
-                    productBehaviorInstruction = "ACTION: The character MUST be WEARING the glasses on their face.";
-                    break;
-                case 'toy_gadget':
-                    productBehaviorInstruction = "ACTION: The character MUST be PLAYING WITH or HOLDING the gadget.";
-                    break;
-                case 'general':
-                default:
-                    productBehaviorInstruction = "ACTION: The character should be HOLDING or USING the product.";
-                    break;
-            }
-        }
-
-        const productInstruction = includeProduct 
-            ? `STRICT PROFESSIONAL AFFILIATE MARKETING MODE:
-               - CATEGORY LOCK: **${productCategory.toUpperCase()}**.
-               - ${productBehaviorInstruction}
-               - PRODUCT DETAIL INSTRUCTIONS: ${productDesc || 'Match the appearance of the product image provided.'}
-               - Ensure product appearance matches reference exactly.
-               - Scenes: Hook -> Problem -> Solution -> Social Proof -> CTA (Visual Only, NO TEXT).`
-            : 'Focus on a cohesive personal lifestyle vlog.';
-
-        const promptText = `Create a 7-scene video script sequence (vertical 9:16) based on: "${scenario}".
-            Target Language: ${language}.
-
-            ${productInstruction}
-            
-            VISUAL CONSISTENCY RULES:
-               - CHARACTER BASE: "${characterDesc || 'The main subject'}".
-               - INSTRUCTION: In EVERY 'visual_prompt', REPEAT the character's physical description.
-               - STRICTLY NO TEXT DESCRIPTIONS: The 'visual_prompt' MUST NOT contain words like "text", "words", "caption", "sign", "overlay", "title", "logo".
-               - FOR SCENE 7 (CTA): Describe a physical action (e.g., character pointing, waving, smiling, thumbs up) WITHOUT any background text or floating words.
-               - IMPORTANT: Keep visual prompts concise (under 50 words) to prevent token overflow, but descriptive enough for generation.
-
-            CRITICAL OUTPUT RULES:
-            1. Output strictly a JSON ARRAY of 7 objects.
-            2. "visual_prompt": Detailed but efficient English prompt for Image Gen AI (PURE VISUALS ONLY).
-            3. "spoken_script": Natural, viral-style voiceover in ${language}.
-            4. "background_sound": Audio mood/sfx suggestion.
-            
-            JSON Schema:
-            [
-              { "scene_number": 1, "visual_prompt": "...", "spoken_script": "...", "background_sound": "..." }
-            ]`;
-
-        parts.push({ text: promptText });
-
         const response = await client.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: { parts: parts },
-            config: {
-                responseMimeType: "application/json",
-                // We don't explicitly set maxOutputTokens to avoid cutting it off unnecessarily, 
-                // but rely on the model's default which is usually generous for Flash.
-                responseSchema: {
-                    type: Type.ARRAY,
-                    items: {
-                        type: Type.OBJECT,
-                        properties: {
-                            scene_number: { type: Type.INTEGER },
-                            visual_prompt: { type: Type.STRING },
-                            spoken_script: { type: Type.STRING },
-                            background_sound: { type: Type.STRING }
-                        }
-                    }
-                }
-            }
+            contents: `You are a professional AI Prompt Engineer for Grok / Flux.
+            Convert this simple idea into a highly detailed, photorealistic image or video prompt suitable for Grok's vision capabilities.
+
+            Input Idea: "${simpleIdea}"
+
+            Requirements:
+            - Focus on texture, lighting (e.g. volumetric, golden hour), and realistic details (8k, raw photo).
+            - Mention specific camera lenses or styles if relevant (e.g. 35mm, f/1.8).
+            - Describe the scene vividly.
+            - Keep it under 100 words.
+            - Output ONLY the prompt text in English.`,
         });
-        const json = safeJsonParse(response.text || "[]", []);
-        if (!Array.isArray(json) || json.length === 0) {
-             console.warn("UGC Script generation returned empty or invalid JSON");
-        }
-        return json;
+        return response.text || "";
     });
 }
 
-// VIDEO GENERATION (VEO)
-export async function generateVeoVideo(prompt: string, imageBase64: string | null, aspectRatio: AspectRatio = '16:9'): Promise<string> {
-    return callWithApiKeyRotation(async (client, key) => {
-        // Use the 'generate-preview' model for better quality as requested ("veo3.1 terbaru")
-        // NOTE: Veo requires a paid tier project. 
-        const request: any = {
-            model: 'veo-3.1-generate-preview', 
-            prompt: prompt,
-            config: {
-                 numberOfVideos: 1,
-                 resolution: '720p',
-                 aspectRatio: aspectRatio 
-            }
-        };
+// VIDEO GENERATOR (Veo) - IMAGE TO VIDEO
+export async function generateVeoImageToVideo(imageBase64: string, prompt: string, apiKey: string): Promise<string> {
+    const client = new GoogleGenAI({ apiKey });
+    
+    // Clean base64 string
+    const cleanBase64 = imageBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
+    const mimeTypeMatch = imageBase64.match(/^data:(image\/\w+);base64,/);
+    const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg';
 
-        if (imageBase64) {
-             // Extract base64 data and mime type
-             const match = imageBase64.match(/^data:(.+);base64,(.+)$/);
-             if (match) {
-                 request.image = {
-                     mimeType: match[1],
-                     imageBytes: match[2]
-                 };
-             }
+    // Retry wrapper for initial call
+    let operation = await retryOperation(() => client.models.generateVideos({
+        model: 'veo-3.1-fast-generate-preview',
+        prompt: prompt || "Animate this image naturally",
+        image: {
+            imageBytes: cleanBase64,
+            mimeType: mimeType
+        },
+        config: {
+             // Default config
         }
+    }), 3, "Veo Video Initiation");
 
-        let operation = await client.models.generateVideos(request);
-
-        // Polling loop
-        while (!operation.done) {
-             await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
-             operation = await client.operations.getVideosOperation({ operation: operation });
-        }
-
-        const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-        if (!videoUri) throw new Error("No video URI returned from Veo.");
-
-        // Fetch the actual video blob using the same key
-        const vidResponse = await fetch(`${videoUri}&key=${key}`);
-        if (!vidResponse.ok) throw new Error("Failed to download video file.");
+    // Polling loop with retry wrapper
+    while (!operation.done) {
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Poll every 5s
         
-        const blob = await vidResponse.blob();
-        return URL.createObjectURL(blob);
-    });
+        operation = await retryOperation(() => 
+            client.operations.getVideosOperation({ operation: operation }), 
+            3, 
+            "Veo Polling"
+        );
+        
+        // Check for internal operation errors
+        if (operation.error) {
+             throw new Error(`Video Generation Error: ${operation.error.message || JSON.stringify(operation.error)}`);
+        }
+    }
+
+    const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+    if (!videoUri) throw new Error("Video generation completed but no URI returned.");
+    
+    // Append API Key to fetch result
+    return `${videoUri}&key=${apiKey}`;
 }

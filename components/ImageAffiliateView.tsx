@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { CharacterImageData, GeneratedImage, LanguageOption, ProductCategory } from '../types';
 import { PRODUCT_CATEGORIES } from '../constants';
-import { SparklesIcon, DownloadIcon, RefreshIcon, MusicNoteIcon, XIcon } from './Icons';
+import { SparklesIcon, DownloadIcon, RefreshIcon, MusicNoteIcon, XIcon, VideoCameraIcon } from './Icons';
 import { Spinner } from './common/Spinner';
 import { ImageLoadingSkeleton } from './common/ImageLoadingSkeleton';
 import { ImageUploader } from './common/ImageUploader';
@@ -26,6 +26,8 @@ interface ImageAffiliateViewProps {
     onCharacterDescChange: (text: string) => void;
     productDesc: string;
     onProductDescChange: (text: string) => void;
+    shotType: string;
+    onShotTypeChange: (type: string) => void;
 }
 
 const LockToggle: React.FC<{ label: string; isLocked: boolean; onToggle: () => void; hasImage: boolean }> = ({ label, isLocked, onToggle, hasImage }) => (
@@ -77,7 +79,9 @@ export const ImageAffiliateView: React.FC<ImageAffiliateViewProps> = ({
     characterDesc,
     onCharacterDescChange,
     productDesc,
-    onProductDescChange
+    onProductDescChange,
+    shotType,
+    onShotTypeChange
 }) => {
     const [useCharacter, setUseCharacter] = useState(true);
     const [useProduct, setUseProduct] = useState(true);
@@ -213,21 +217,44 @@ export const ImageAffiliateView: React.FC<ImageAffiliateViewProps> = ({
                                     </div>
                                 )}
                             </div>
-
-                             <div>
-                                <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mb-2">Bahasa Konten</p>
-                                <div className="relative">
-                                    <select
-                                        value={selectedLanguage}
-                                        onChange={(e) => onLanguageChange(e.target.value)}
-                                        className="w-full bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold py-3 px-4 pr-10 rounded-lg border border-slate-300 dark:border-slate-600 appearance-none focus:outline-none focus:ring-2 focus:ring-cyan-500 transition-all cursor-pointer"
-                                    >
-                                        {languages.map(lang => (
-                                            <option key={lang.value} value={lang.value}>{lang.name}</option>
-                                        ))}
-                                    </select>
-                                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-700 dark:text-slate-300">
-                                        <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                            
+                            {/* Camera Shot & Language */}
+                            <div className="grid grid-cols-1 gap-4">
+                                <div>
+                                    <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mb-2">Gaya Kamera / Shot Type</p>
+                                    <div className="relative">
+                                        <select
+                                            value={shotType}
+                                            onChange={(e) => onShotTypeChange(e.target.value)}
+                                            className="w-full bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold py-3 px-4 pr-10 rounded-lg border border-slate-300 dark:border-slate-600 appearance-none focus:outline-none focus:ring-2 focus:ring-cyan-500 transition-all cursor-pointer"
+                                        >
+                                            <option value="default">Default (Cinematic Mix)</option>
+                                            <option value="hand_focus">Hand Focus (Tangan & Produk)</option>
+                                            <option value="closeup">Close Up (Detail Wajah/Produk)</option>
+                                            <option value="medium">Medium Shot (Setengah Badan)</option>
+                                            <option value="fullbody">Full Body (Seluruh Badan/OOTD)</option>
+                                        </select>
+                                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-700 dark:text-slate-300">
+                                            <VideoCameraIcon className="h-4 w-4"/>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mb-2">Bahasa Konten</p>
+                                    <div className="relative">
+                                        <select
+                                            value={selectedLanguage}
+                                            onChange={(e) => onLanguageChange(e.target.value)}
+                                            className="w-full bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold py-3 px-4 pr-10 rounded-lg border border-slate-300 dark:border-slate-600 appearance-none focus:outline-none focus:ring-2 focus:ring-cyan-500 transition-all cursor-pointer"
+                                        >
+                                            {languages.map(lang => (
+                                                <option key={lang.value} value={lang.value}>{lang.name}</option>
+                                            ))}
+                                        </select>
+                                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-700 dark:text-slate-300">
+                                            <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -339,7 +366,9 @@ export const ImageAffiliateView: React.FC<ImageAffiliateViewProps> = ({
                                                 
                                                 {jsonObj.spoken_script && (
                                                     <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800">
-                                                        <p className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase mb-1">Voice Over Script</p>
+                                                        <p className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase mb-1">
+                                                            Voice Over Script (Indo, ~8 Detik)
+                                                        </p>
                                                         <p className="text-sm text-slate-700 dark:text-slate-300">
                                                             {jsonObj.spoken_script}
                                                         </p>
@@ -392,4 +421,3 @@ export const ImageAffiliateView: React.FC<ImageAffiliateViewProps> = ({
         </div>
     );
 };
-    

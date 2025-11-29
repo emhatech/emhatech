@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { XIcon, PlusIcon, TrashIcon } from './Icons';
 
@@ -69,6 +68,12 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, currentApiKeys
         <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
           Masukkan hingga 10 kunci API. Kunci akan dicoba secara berurutan. Kunci Anda disimpan dengan aman di browser Anda.
         </p>
+        <div className="mb-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded p-3 text-xs text-amber-800 dark:text-amber-200">
+            <strong>⚠️ WAJIB UNTUK VEO (VIDEO):</strong> <br/>
+            Untuk menggunakan fitur Video Generator (Veo), API Key Anda HARUS berasal dari <strong>Google Cloud Project</strong> dengan <strong>Billing (Kartu Kredit) Aktif</strong>. 
+            <br/><br/>
+            Key gratis dari AI Studio (aistudio.google.com) biasanya <strong>tidak support Veo</strong> (Akan error 404).
+        </div>
         <div className="space-y-3 max-h-60 overflow-y-auto pr-2">
             {apiKeysInput.map((key, index) => (
                 <div key={index} className="flex items-center gap-2">

@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { Genre, StoryIdea, CharacterImageData, Gender, AspectRatio } from '../types';
-import { PlusIcon, SparklesIcon, XIcon, WandIcon, LandscapeIcon, PortraitIcon } from './Icons';
+import { PlusIcon, SparklesIcon, XIcon, WandIcon, LandscapeIcon, PortraitIcon, FilmIcon } from './Icons';
 import { Spinner } from './common/Spinner';
 import { CharacterCreator } from './CharacterCreator';
 import { ToggleButton } from './common/ToggleButton';
@@ -32,6 +32,8 @@ interface StoryWizardProps {
   onAnimalImageChange: (imageData: CharacterImageData | null) => void;
   imageAspectRatio: AspectRatio;
   onImageAspectRatioChange: (ratio: AspectRatio) => void;
+  sceneCount: number;
+  onSceneCountChange: (count: number) => void;
 }
 
 export const StoryWizard: React.FC<StoryWizardProps> = ({
@@ -59,6 +61,8 @@ export const StoryWizard: React.FC<StoryWizardProps> = ({
   onAnimalImageChange,
   imageAspectRatio,
   onImageAspectRatioChange,
+  sceneCount,
+  onSceneCountChange,
 }) => {
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
@@ -143,36 +147,58 @@ export const StoryWizard: React.FC<StoryWizardProps> = ({
           <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col">
                 <h2 className="text-lg font-bold text-cyan-700 dark:text-cyan-400 mb-4 flex items-center">
                     <span className="bg-cyan-100 dark:bg-cyan-900/30 text-cyan-600 dark:text-cyan-400 w-6 h-6 rounded-full flex items-center justify-center text-sm mr-2">3</span>
-                    Pengaturan Visual
+                    Pengaturan Visual & Durasi
                </h2>
                
-               <div className="mb-6">
-                    <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mb-2">Rasio Gambar</p>
-                    <div className="flex gap-3">
-                        <button
-                            type="button"
-                            onClick={() => onImageAspectRatioChange('16:9')}
-                            className={`flex-1 py-3 px-4 rounded-lg border text-sm font-semibold transition-all flex flex-col items-center justify-center gap-2 ${
-                                imageAspectRatio === '16:9'
-                                    ? 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-500 text-cyan-700 dark:text-cyan-400 ring-1 ring-cyan-500'
-                                    : 'bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'
-                            }`}
-                        >
-                            <LandscapeIcon className="h-6 w-6" />
-                            Landscape (16:9)
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => onImageAspectRatioChange('9:16')}
-                            className={`flex-1 py-3 px-4 rounded-lg border text-sm font-semibold transition-all flex flex-col items-center justify-center gap-2 ${
-                                imageAspectRatio === '9:16'
-                                    ? 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-500 text-cyan-700 dark:text-cyan-400 ring-1 ring-cyan-500'
-                                    : 'bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'
-                            }`}
-                        >
-                            <PortraitIcon className="h-6 w-6" />
-                            Portrait (9:16)
-                        </button>
+               <div className="mb-6 space-y-4">
+                    <div>
+                        <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mb-2">Rasio Gambar</p>
+                        <div className="flex gap-3">
+                            <button
+                                type="button"
+                                onClick={() => onImageAspectRatioChange('16:9')}
+                                className={`flex-1 py-3 px-4 rounded-lg border text-sm font-semibold transition-all flex flex-col items-center justify-center gap-2 ${
+                                    imageAspectRatio === '16:9'
+                                        ? 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-500 text-cyan-700 dark:text-cyan-400 ring-1 ring-cyan-500'
+                                        : 'bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'
+                                }`}
+                            >
+                                <LandscapeIcon className="h-6 w-6" />
+                                Landscape (16:9)
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onImageAspectRatioChange('9:16')}
+                                className={`flex-1 py-3 px-4 rounded-lg border text-sm font-semibold transition-all flex flex-col items-center justify-center gap-2 ${
+                                    imageAspectRatio === '9:16'
+                                        ? 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-500 text-cyan-700 dark:text-cyan-400 ring-1 ring-cyan-500'
+                                        : 'bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'
+                                }`}
+                            >
+                                <PortraitIcon className="h-6 w-6" />
+                                Portrait (9:16)
+                            </button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mb-2">Jumlah Scene / Adegan</p>
+                        <div className="flex gap-2">
+                             {[5, 10, 15].map(count => (
+                                <button
+                                    key={count}
+                                    type="button"
+                                    onClick={() => onSceneCountChange(count)}
+                                    className={`flex-1 py-2 px-3 rounded-lg border text-sm font-bold transition-all ${
+                                        sceneCount === count
+                                            ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-500 text-indigo-700 dark:text-indigo-400 ring-1 ring-indigo-500'
+                                            : 'bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'
+                                    }`}
+                                >
+                                    {count} Scene
+                                </button>
+                             ))}
+                        </div>
                     </div>
                </div>
 
@@ -181,7 +207,7 @@ export const StoryWizard: React.FC<StoryWizardProps> = ({
                         image={animalImage}
                         onImageChange={onAnimalImageChange}
                         label="Pendamping / Hewan (Opsional)"
-                        heightClass="h-24"
+                        heightClass="h-20"
                     />
                </div>
           </div>
@@ -235,7 +261,7 @@ export const StoryWizard: React.FC<StoryWizardProps> = ({
                 {isGeneratingStory ? (
                     <>
                         <Spinner className="h-6 w-6 mr-3 text-white"/>
-                        <span className="text-lg">Sedang Merangkai Cerita...</span>
+                        <span className="text-lg">Sedang Merangkai {sceneCount} Scene...</span>
                     </>
                 ) : (
                     <>

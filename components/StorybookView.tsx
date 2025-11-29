@@ -36,7 +36,7 @@ export const StorybookView: React.FC<StorybookViewProps> = ({
   return (
     <div className="mt-8 bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-lg animate-fade-in transition-colors duration-300">
         <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-6 gap-3">
-            <h2 className="text-2xl font-bold text-cyan-700 dark:text-cyan-400 shrink-0">Buku Cerita Anda</h2>
+            <h2 className="text-2xl font-bold text-cyan-700 dark:text-cyan-400 shrink-0">Buku Cerita & Skenario Video</h2>
             <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto sm:justify-end flex-wrap">
                 <div className="relative w-full sm:w-auto">
                     <select
@@ -77,7 +77,7 @@ export const StorybookView: React.FC<StorybookViewProps> = ({
                     className="w-full sm:w-auto bg-cyan-600 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center transition-all duration-200 hover:bg-cyan-700 disabled:bg-slate-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed"
                 >
                     <DownloadIcon className="h-5 w-5 mr-2"/>
-                    Unduh Ilustrasi
+                    Unduh Aset
                 </button>
             </div>
         </div>
@@ -132,14 +132,16 @@ export const StorybookView: React.FC<StorybookViewProps> = ({
                             {/* Right side: Narration and Prompt */}
                             <div className="flex flex-col gap-4">
                                 <div>
-                                    <p className="font-semibold text-slate-600 dark:text-slate-300 mb-1">Narasi</p>
-                                    <p className="text-slate-600 dark:text-slate-400 text-sm leading-relaxed">{narration}</p>
+                                    <p className="font-semibold text-slate-600 dark:text-slate-300 mb-1">Voice Over (Narasi)</p>
+                                    <p className="text-slate-600 dark:text-slate-400 text-sm leading-relaxed bg-slate-50 dark:bg-slate-900/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
+                                        "{narration}"
+                                    </p>
                                 </div>
                                 <TextDisplay
-                                    label="Visual Prompt"
+                                    label="Prompt Video (Veo 3 Optimized)"
                                     text={img.prompt}
                                     rows={4}
-                                    copyButtonText="Salin Prompt"
+                                    copyButtonText="Salin Prompt Video"
                                 />
                             </div>
                         </div>
