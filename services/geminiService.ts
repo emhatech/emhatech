@@ -8,8 +8,6 @@ export function setApiKeys(keys: string[]) {
     apiKeys = keys;
 }
 
-// Removed Hardcoded FALLBACK_KEY for security
-
 // Helper to extract error message robustly
 function getErrorMessage(error: any): string {
     if (!error) return "Unknown Error";
@@ -101,15 +99,7 @@ async function retryOperation<T>(fn: () => Promise<T>, retries = 3, operationNam
 }
 
 async function callWithApiKeyRotation<T>(operation: (client: GoogleGenAI, key: string) => Promise<T>): Promise<T> {
-    const envKey = process.env.API_KEY || "";
-    // If apiKeys array is populated (user entered), use it. 
-    // If not, check if envKey exists. If neither, return empty array.
-    const keysToTry = apiKeys.length > 0 ? apiKeys : (envKey ? [envKey] : []);
-    
-    if (keysToTry.length === 0) {
-        throw new Error("API Key belum diatur. Silakan klik tombol Gerigi (Pengaturan) di pojok kanan atas untuk memasukkan API Key Anda.");
-    }
-
+    const keysToTry = apiKeys.length > 0 ? apiKeys : [process.env.API_KEY || ''];
     let lastError: any;
     
     for (const key of keysToTry) {
