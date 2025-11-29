@@ -25,7 +25,7 @@ import {
 import { pcmToWavBlob, decodeBase64 } from './utils/audio';
 import { VOICE_OPTIONS, UGC_LANGUAGES, LYRIC_LANGUAGES } from './constants';
 
-const DEFAULT_API_KEY = "AIzaSyA2Jn4StmV6qGrAK23XAN-p6vG0i3WO-3w";
+// Removed Hardcoded DEFAULT_API_KEY for security
 
 const FUNNY_MESSAGES = [
     "EmhaTech sedang memasak, tunggu dulu ya... 🍳",
@@ -143,17 +143,19 @@ export const App: React.FC = () => {
                 } catch (jsonError) {
                     console.warn("Failed to parse saved API keys, clearing storage.", jsonError);
                     localStorage.removeItem('gemini_api_keys');
-                    // Fallback to default
-                    setApiKeysState([DEFAULT_API_KEY]);
-                    setApiKeys([DEFAULT_API_KEY]);
+                    setApiKeysState([]);
+                    setApiKeys([]);
                 }
             } else {
-                 // Use default key automatically
-                 setApiKeysState([DEFAULT_API_KEY]);
-                 setApiKeys([DEFAULT_API_KEY]);
-                 
-                 // Modal is only shown if for some reason even the default key is gone
-                 if (!process.env.API_KEY && !DEFAULT_API_KEY) {
+                 // Check environment variable
+                 const envKey = process.env.API_KEY;
+                 if (envKey) {
+                     setApiKeysState([envKey]);
+                     setApiKeys([envKey]);
+                 } else {
+                     setApiKeysState([]);
+                     setApiKeys([]);
+                     // No keys found, prompt user to enter one
                      setTimeout(() => setShowApiKeyModal(true), 1000);
                  }
             }
@@ -226,7 +228,8 @@ export const App: React.FC = () => {
             const ideas = await generateStoryIdeas(selectedGenre.name);
             setStoryIdeas(ideas);
         } catch (error) {
-            alert(`Gagal memuat ide: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error(error);
+            // alert(`Gagal memuat ide: ${error instanceof Error ? error.message : 'Unknown error'}`);
         } finally {
             setIsLoadingIdeas(false);
         }
@@ -264,7 +267,7 @@ export const App: React.FC = () => {
             const polished = await polishStoryText(storyText);
             setStoryText(polished);
         } catch (error) {
-            alert('Gagal memoles cerita. Coba lagi.');
+            alert('Gagal memoles cerita. Pastikan API Key sudah diatur.');
         } finally {
             setIsPolishing(false);
         }
@@ -318,7 +321,7 @@ export const App: React.FC = () => {
              if (getIsGlobalError(error)) {
                 alert(`Error: ${error.message}`);
              } else {
-                alert(`Gagal membuat cerita: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                alert(`Gagal membuat cerita: ${error instanceof Error ? error.message : 'Pastikan API Key sudah diatur.'}`);
              }
             setIsGeneratingStory(false);
         }
@@ -326,7 +329,7 @@ export const App: React.FC = () => {
     
     const getIsGlobalError = (error: any) => {
         const msg = error?.message || "";
-        return msg.includes("API key not valid") || msg.includes("Failed to fetch") || msg.includes("Rpc failed") || msg.includes("xhr error");
+        return msg.includes("API Key") || msg.includes("Failed to fetch") || msg.includes("Rpc failed") || msg.includes("xhr error");
     };
 
     const handleRegenerateImage = async (imageToRegen: GeneratedImage) => {
@@ -536,7 +539,7 @@ export const App: React.FC = () => {
             setOriginalLyrics(result.lyrics);
             setLyricSources(result.sources);
         } catch (error) {
-            alert("Gagal mengambil lirik.");
+            alert("Gagal mengambil lirik. Pastikan API Key valid.");
         } finally {
             setIsFetchingLyrics(false);
         }
@@ -670,7 +673,7 @@ export const App: React.FC = () => {
                                         >
                                             ← Kembali ke Wizard
                                         </button>
-                                        <span className="text-sm text-slate-500 dark:text-slate-400">Hasil Generasi Cerita</span>
+                                        <span className="text-sm text-slate-500 dark:text-slate-400 Hasil Generasi Cerita"></span>
                                     </div>
                                     <StorybookView
                                         fullStory={fullStory}
