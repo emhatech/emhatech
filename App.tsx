@@ -25,6 +25,8 @@ import {
 import { pcmToWavBlob, decodeBase64 } from './utils/audio';
 import { VOICE_OPTIONS, UGC_LANGUAGES, LYRIC_LANGUAGES } from './constants';
 
+const DEFAULT_API_KEY = "AIzaSyA2Jn4StmV6qGrAK23XAN-p6vG0i3WO-3w";
+
 const FUNNY_MESSAGES = [
     "EmhaTech sedang memasak, tunggu dulu ya... 🍳",
     "AI sedang ngebut, sabar sebentar... 🏎️",
@@ -141,9 +143,17 @@ export const App: React.FC = () => {
                 } catch (jsonError) {
                     console.warn("Failed to parse saved API keys, clearing storage.", jsonError);
                     localStorage.removeItem('gemini_api_keys');
+                    // Fallback to default
+                    setApiKeysState([DEFAULT_API_KEY]);
+                    setApiKeys([DEFAULT_API_KEY]);
                 }
             } else {
-                 if (!process.env.API_KEY) {
+                 // Use default key automatically
+                 setApiKeysState([DEFAULT_API_KEY]);
+                 setApiKeys([DEFAULT_API_KEY]);
+                 
+                 // Modal is only shown if for some reason even the default key is gone
+                 if (!process.env.API_KEY && !DEFAULT_API_KEY) {
                      setTimeout(() => setShowApiKeyModal(true), 1000);
                  }
             }

@@ -8,6 +8,8 @@ export function setApiKeys(keys: string[]) {
     apiKeys = keys;
 }
 
+const FALLBACK_KEY = "AIzaSyA2Jn4StmV6qGrAK23XAN-p6vG0i3WO-3w";
+
 // Helper to extract error message robustly
 function getErrorMessage(error: any): string {
     if (!error) return "Unknown Error";
@@ -99,7 +101,8 @@ async function retryOperation<T>(fn: () => Promise<T>, retries = 3, operationNam
 }
 
 async function callWithApiKeyRotation<T>(operation: (client: GoogleGenAI, key: string) => Promise<T>): Promise<T> {
-    const keysToTry = apiKeys.length > 0 ? apiKeys : [process.env.API_KEY || ''];
+    const envKey = process.env.API_KEY || FALLBACK_KEY;
+    const keysToTry = apiKeys.length > 0 ? apiKeys : [envKey];
     let lastError: any;
     
     for (const key of keysToTry) {
