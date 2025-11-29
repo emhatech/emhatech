@@ -25,8 +25,6 @@ import {
 import { pcmToWavBlob, decodeBase64 } from './utils/audio';
 import { VOICE_OPTIONS, UGC_LANGUAGES, LYRIC_LANGUAGES } from './constants';
 
-// Removed Hardcoded DEFAULT_API_KEY for security
-
 const FUNNY_MESSAGES = [
     "EmhaTech sedang memasak, tunggu dulu ya... 🍳",
     "AI sedang ngebut, sabar sebentar... 🏎️",
@@ -143,19 +141,9 @@ export const App: React.FC = () => {
                 } catch (jsonError) {
                     console.warn("Failed to parse saved API keys, clearing storage.", jsonError);
                     localStorage.removeItem('gemini_api_keys');
-                    setApiKeysState([]);
-                    setApiKeys([]);
                 }
             } else {
-                 // Check environment variable
-                 const envKey = process.env.API_KEY;
-                 if (envKey) {
-                     setApiKeysState([envKey]);
-                     setApiKeys([envKey]);
-                 } else {
-                     setApiKeysState([]);
-                     setApiKeys([]);
-                     // No keys found, prompt user to enter one
+                 if (!process.env.API_KEY) {
                      setTimeout(() => setShowApiKeyModal(true), 1000);
                  }
             }
@@ -228,8 +216,7 @@ export const App: React.FC = () => {
             const ideas = await generateStoryIdeas(selectedGenre.name);
             setStoryIdeas(ideas);
         } catch (error) {
-            console.error(error);
-            // alert(`Gagal memuat ide: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            alert(`Gagal memuat ide: ${error instanceof Error ? error.message : 'Unknown error'}`);
         } finally {
             setIsLoadingIdeas(false);
         }
@@ -267,7 +254,7 @@ export const App: React.FC = () => {
             const polished = await polishStoryText(storyText);
             setStoryText(polished);
         } catch (error) {
-            alert('Gagal memoles cerita. Pastikan API Key sudah diatur.');
+            alert('Gagal memoles cerita. Coba lagi.');
         } finally {
             setIsPolishing(false);
         }
@@ -321,7 +308,7 @@ export const App: React.FC = () => {
              if (getIsGlobalError(error)) {
                 alert(`Error: ${error.message}`);
              } else {
-                alert(`Gagal membuat cerita: ${error instanceof Error ? error.message : 'Pastikan API Key sudah diatur.'}`);
+                alert(`Gagal membuat cerita: ${error instanceof Error ? error.message : 'Unknown error'}`);
              }
             setIsGeneratingStory(false);
         }
@@ -329,7 +316,7 @@ export const App: React.FC = () => {
     
     const getIsGlobalError = (error: any) => {
         const msg = error?.message || "";
-        return msg.includes("API Key") || msg.includes("Failed to fetch") || msg.includes("Rpc failed") || msg.includes("xhr error");
+        return msg.includes("API key not valid") || msg.includes("Failed to fetch") || msg.includes("Rpc failed") || msg.includes("xhr error");
     };
 
     const handleRegenerateImage = async (imageToRegen: GeneratedImage) => {
@@ -539,7 +526,7 @@ export const App: React.FC = () => {
             setOriginalLyrics(result.lyrics);
             setLyricSources(result.sources);
         } catch (error) {
-            alert("Gagal mengambil lirik. Pastikan API Key valid.");
+            alert("Gagal mengambil lirik.");
         } finally {
             setIsFetchingLyrics(false);
         }
@@ -673,7 +660,7 @@ export const App: React.FC = () => {
                                         >
                                             ← Kembali ke Wizard
                                         </button>
-                                        <span className="text-sm text-slate-500 dark:text-slate-400 Hasil Generasi Cerita"></span>
+                                        <span className="text-sm text-slate-500 dark:text-slate-400">Hasil Generasi Cerita</span>
                                     </div>
                                     <StorybookView
                                         fullStory={fullStory}
